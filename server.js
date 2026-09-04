@@ -124,11 +124,49 @@ db.exec(`
   );
 `);
 
-if (db.prepare('SELECT COUNT(*) AS count FROM users').get().count === 0) {
-  const password = process.env.INITIAL_ADMIN_PASSWORD || 'CivilAffairs2026!';
+const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD;
+
+if (process.env.RESET_ADMIN_PASSWORD === 'true' && required(initialAdminPassword)) {
+  const admin = db.prepare(
+    'SELECT id FROM users WHERE lower(email) = lower(?)'
+  ).get('admin@civilaffairs.local');
+
+  if (admin) {
+    db.prepare(
+      'UPDATE users SET password_hash=?, updated_at=? WHERE id=?'
+    ).run(passwordHash(initialAdminPassword), now(), admin.id);
+
+    console.log('Admin password reset from INITIAL_ADMIN_PASSWORD.');
+  } else {
+    const stamp = now();
+
+    db.prepare(
+      'INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      'admin@civilaffairs.local',
+      passwordHash(initialAdminPassword),
+      'Civil Office Administrator',
+      'Administrator',
+      stamp,
+      stamp
+    );
+
+    console.log('Initial administrator account created.');
+  }
+} else if (db.prepare('SELECT COUNT(*) AS count FROM users').get().count === 0) {
+  const password = initialAdminPassword || 'CivilAffairs2026!';
   const stamp = now();
-  db.prepare('INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run('admin@civilaffairs.local', passwordHash(password), 'Civil Office Administrator', 'Administrator', stamp, stamp);
+
+  db.prepare(
+    'INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(
+    'admin@civilaffairs.local',
+    passwordHash(password),
+    'Civil Office Administrator',
+    'Administrator',
+    stamp,
+    stamp
+  );
 }
 
 if (db.prepare('SELECT COUNT(*) AS count FROM staff').get().count === 0) {
