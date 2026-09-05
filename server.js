@@ -49,6 +49,16 @@ function requireAuth(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to the Civil Office console.' });
   next();
 }
+function requireAdmin(req, res, next) {
+  if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to the Civil Office console.' });
+  if (!['Administrator', 'Sub-administrator'].includes(req.session.user.role)) return res.status(403).json({ error: 'You do not have access to the Civil Office console.' });
+  next();
+}
+function requireAdministrator(req, res, next) {
+  if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to the Civil Office console.' });
+  if (req.session.user.role !== 'Administrator') return res.status(403).json({ error: 'Only an Administrator can manage user access.' });
+  next();
+}
 const loginAttempts = new Map();
 function loginAllowed(ip) {
   const attempt = loginAttempts.get(ip);
@@ -61,70 +71,109 @@ function recordFailedLogin(ip) {
   else attempt.count += 1;
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS complaints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reference TEXT NOT NULL UNIQUE,
-    type TEXT NOT NULL,
-    category TEXT NOT NULL,
-    location TEXT NOT NULL,
-    reporter_name TEXT NOT NULL,
-    reporter_phone TEXT NOT NULL,
-    reporter_email TEXT,
-    description TEXT NOT NULL,
-    photo_name TEXT,
-    latitude REAL,
-    longitude REAL,
-    priority TEXT NOT NULL DEFAULT 'Medium',
-    status TEXT NOT NULL DEFAULT 'New',
-    assigned_to TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS staff (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    department TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    attendance TEXT NOT NULL DEFAULT 'Present',
-    current_task TEXT,
-    last_sms_at TEXT
-  );
-  CREATE TABLE IF NOT EXISTS equipment (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset_code TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    holder TEXT,
-    issued_on TEXT,
-    expected_return TEXT,
-    condition TEXT NOT NULL DEFAULT 'Good',
-    status TEXT NOT NULL DEFAULT 'Available'
-  );
-  CREATE TABLE IF NOT EXISTS tenders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tender_no TEXT NOT NULL UNIQUE,
-    scope TEXT NOT NULL,
-    closing_date TEXT,
-    bids INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'Draft',
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS activity (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-`);
+const commonDesignations = [
+  ['Civil Office Administrator', 'Overall Civil Office administration'],
+  ['Assistant Administrator', 'Assistant civil administration and coordination'],
+  ['Junior Engineer', 'Engineering inspection and field works'],
+  ['Senior Engineer', 'Senior engineering supervision and approvals'],
+  ['Sanitation Officer', 'Sanitation and waste-management supervision'],
+  ['Electrical Supervisor', 'Electrical works and maintenance supervision'],
+  ['Waterworks Supervisor', 'Water supply and waterworks supervision'],
+  ['Field Inspector', 'Field inspection and verification'],
+  ['Office Assistant', 'Office support and records'],
+  ['Data Entry Operator', 'Data entry and register maintenance']
+];
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS complaints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reference TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL,
+      location TEXT NOT NULL,
+      reporter_name TEXT NOT NULL,
+      reporter_phone TEXT NOT NULL,
+      reporter_email TEXT,
+      description TEXT NOT NULL,
+      photo_name TEXT,
+      latitude REAL,
+      longitude REAL,
+      priority TEXT NOT NULL DEFAULT 'Medium',
+      status TEXT NOT NULL DEFAULT 'New',
+      assigned_to TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS designations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS staff (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      designation_id INTEGER,
+      department TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      attendance TEXT NOT NULL DEFAULT 'Present',
+      current_task TEXT,
+      last_sms_at TEXT,
+      FOREIGN KEY (designation_id) REFERENCES designations(id) ON DELETE RESTRICT
+    );
+    CREATE TABLE IF NOT EXISTS equipment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      holder TEXT,
+      issued_on TEXT,
+      expected_return TEXT,
+      condition TEXT NOT NULL DEFAULT 'Good',
+      status TEXT NOT NULL DEFAULT 'Available'
+    );
+    CREATE TABLE IF NOT EXISTS tenders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tender_no TEXT NOT NULL UNIQUE,
+      scope TEXT NOT NULL,
+      closing_date TEXT,
+      bids INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'Draft',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+} catch (error) {
+  if (String(error.message).includes('duplicate column')) throw error;
+}
+
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+ensureColumn('staff', 'designation_id', 'INTEGER');
+
+const insertDesignation = db.prepare('INSERT OR IGNORE INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)');
+commonDesignations.forEach(([name, description]) => insertDesignation.run(name, description, now(), now()));
+const unassigned = db.prepare("SELECT id FROM designations WHERE lower(name) = lower('Unassigned')").get();
+if (!unassigned) insertDesignation.run('Unassigned', 'Temporary placeholder for staff without a designation.', now(), now());
+const unassignedDesignation = db.prepare("SELECT id FROM designations WHERE lower(name) = lower('Unassigned')").get();
+db.prepare('UPDATE staff SET designation_id=? WHERE designation_id IS NULL').run(unassignedDesignation.id);
 
 const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD;
 
@@ -172,14 +221,15 @@ if (process.env.RESET_ADMIN_PASSWORD === 'true' && required(initialAdminPassword
 }
 
 if (db.prepare('SELECT COUNT(*) AS count FROM staff').get().count === 0) {
-  const addStaff = db.prepare('INSERT INTO staff (name, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?)');
+  const designationIds = new Map(db.prepare('SELECT id, name FROM designations').all().map(row => [row.name, row.id]));
+  const addStaff = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)');
   [
-    ['R. Kumar', 'Waterworks', '9876500101', 'Present', 'Investigating F/12, Sector 4'],
-    ['A. Singh', 'Electrical', '9876500102', 'Present', 'Electrical repair at G/08'],
-    ['S. Verma', 'Inspection', '9876500103', 'Present', 'Inspection at Market SM58'],
-    ['M. Prasad', 'Sanitation', '9876500104', 'Present', 'Collection route, Sector 2'],
-    ['J. Khan', 'Roads', '9876500105', 'Absent', null],
-    ['P. Devi', 'Horticulture', '9876500106', 'Present', 'Bush trimming, Sector 5']
+    ['R. Kumar', designationIds.get('Waterworks Supervisor'), 'Waterworks', '9876500101', 'Present', 'Investigating F/12, Sector 4'],
+    ['A. Singh', designationIds.get('Electrical Supervisor'), 'Electrical', '9876500102', 'Present', 'Electrical repair at G/08'],
+    ['S. Verma', designationIds.get('Field Inspector'), 'Inspection', '9876500103', 'Present', 'Inspection at Market SM58'],
+    ['M. Prasad', designationIds.get('Sanitation Officer'), 'Sanitation', '9876500104', 'Present', 'Collection route, Sector 2'],
+    ['J. Khan', designationIds.get('Junior Engineer'), 'Roads', '9876500105', 'Absent', null],
+    ['P. Devi', designationIds.get('Field Inspector'), 'Horticulture', '9876500106', 'Present', 'Bush trimming, Sector 5']
   ].forEach(row => addStaff.run(...row));
 
   const addEquipment = db.prepare('INSERT INTO equipment (asset_code, name, holder, issued_on, expected_return, condition, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -313,22 +363,128 @@ app.patch('/api/complaints/:id', requireAuth, (req, res) => {
   res.json(db.prepare('SELECT * FROM complaints WHERE id = ?').get(current.id));
 });
 
-app.get('/api/staff', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM staff ORDER BY name').all()));
-app.patch('/api/staff/:id', requireAuth, (req, res) => {
+app.get('/api/designations', requireAuth, (_, res) => res.json(db.prepare('SELECT d.*, COUNT(s.id) AS staff_count FROM designations d LEFT JOIN staff s ON s.designation_id=d.id GROUP BY d.id ORDER BY lower(d.name)').all()));
+app.post('/api/designations', requireAuth, (req, res) => {
+  const { name, description = '' } = req.body;
+  if (!required(name)) return res.status(400).json({ error: 'Designation name is required.' });
+  try {
+    const stamp = now();
+    const result = db.prepare('INSERT INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name.trim(), String(description).trim(), stamp, stamp);
+    logActivity('staff', `Designation created — ${name.trim()}`);
+    res.status(201).json(db.prepare('SELECT * FROM designations WHERE id=?').get(result.lastInsertRowid));
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
+    throw error;
+  }
+});
+app.patch('/api/designations/:id', requireAuth, (req, res) => {
+  const current = db.prepare('SELECT * FROM designations WHERE id=?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Designation not found.' });
+  const { name = current.name, description = current.description || '' } = req.body;
+  if (!required(name)) return res.status(400).json({ error: 'Designation name is required.' });
+  try {
+    db.prepare('UPDATE designations SET name=?, description=?, updated_at=? WHERE id=?').run(name.trim(), String(description).trim(), now(), current.id);
+    logActivity('staff', `Designation updated — ${current.name} to ${name.trim()}`);
+    res.json(db.prepare('SELECT * FROM designations WHERE id=?').get(current.id));
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
+    throw error;
+  }
+});
+app.delete('/api/designations/:id', requireAuth, (req, res) => {
+  const current = db.prepare('SELECT * FROM designations WHERE id=?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Designation not found.' });
+  const count = db.prepare('SELECT COUNT(*) AS count FROM staff WHERE designation_id=?').get(current.id).count;
+  if (count > 0) return res.status(409).json({ error: 'This designation is assigned to staff. Reassign those staff before deleting it.' });
+  db.prepare('DELETE FROM designations WHERE id=?').run(current.id);
+  logActivity('staff', `Designation deleted — ${current.name}`);
+  res.json({ ok: true });
+});
+
+app.get('/api/staff', requireAdmin, (_, res) => res.json(db.prepare(`SELECT s.*, d.name AS designation, d.id AS designation_id FROM staff s LEFT JOIN designations d ON d.id=s.designation_id ORDER BY s.name`).all()));
+app.post('/api/staff', requireAdmin, (req, res) => {
+  const { name, designationId, department, phone, attendance = 'Present', currentTask = '' } = req.body;
+  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Full name, department and phone are required.' });
+  if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
+  const designation = designationId ? db.prepare('SELECT id, name FROM designations WHERE id=?').get(Number(designationId)) : null;
+  if (designationId && !designation) return res.status(400).json({ error: 'Selected designation was not found.' });
+  const result = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)').run(name.trim(), designation?.id || null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null);
+  logActivity('staff', `Staff member added — ${name.trim()}${designation ? ` · ${designation.name}` : ''}`);
+  res.status(201).json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?`).get(result.lastInsertRowid));
+});
+app.patch('/api/staff/:id', requireAdmin, (req, res) => {
   const current = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Staff member not found.' });
-  const { attendance = current.attendance, currentTask = current.current_task } = req.body;
+  const { name = current.name, designationId = current.designation_id, department = current.department, phone = current.phone, attendance = current.attendance, currentTask = current.current_task } = req.body;
+  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Full name, department and phone are required.' });
   if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
-  db.prepare('UPDATE staff SET attendance=?, current_task=? WHERE id=?').run(attendance, currentTask || null, current.id);
-  logActivity('staff', `${current.name} marked ${attendance}${currentTask ? ` — task: ${currentTask}` : ''}`);
-  res.json(db.prepare('SELECT * FROM staff WHERE id=?').get(current.id));
+  const designation = designationId ? db.prepare('SELECT id, name FROM designations WHERE id=?').get(Number(designationId)) : null;
+  if (designationId && !designation) return res.status(400).json({ error: 'Selected designation was not found.' });
+  db.prepare('UPDATE staff SET name=?, designation_id=?, department=?, phone=?, attendance=?, current_task=? WHERE id=?').run(name.trim(), designation?.id || null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null, current.id);
+  logActivity('staff', `${current.name} record updated`);
+  res.json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?`).get(current.id));
 });
-app.post('/api/staff/sms', requireAuth, (req, res) => {
+app.post('/api/staff/sms', requireAdmin, (req, res) => {
   const { message } = req.body;
   if (!required(message)) return res.status(400).json({ error: 'SMS message cannot be empty.' });
   const stamp = now(); const result = db.prepare("UPDATE staff SET last_sms_at=? WHERE attendance='Present'").run(stamp);
   logActivity('sms', `SMS task update sent to ${result.changes} on-duty staff`);
   res.json({ sent: result.changes, message: 'SMS dispatch recorded for on-duty staff.' });
+});
+
+app.get('/api/users', requireAdministrator, (_, res) => {
+  res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users ORDER BY lower(name)').all());
+});
+app.post('/api/users', requireAdministrator, (req, res) => {
+  const { name, email, password, role = 'Sub-administrator' } = req.body;
+  if (![name, email, password].every(required)) return res.status(400).json({ error: 'Name, email and temporary password are required.' });
+  if (password.length < 12) return res.status(400).json({ error: 'Use at least 12 characters for the temporary password.' });
+  if (!['Administrator', 'Sub-administrator'].includes(role)) return res.status(400).json({ error: 'Invalid user role.' });
+  try {
+    const stamp = now();
+    const result = db.prepare('INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(email.trim().toLowerCase(), passwordHash(password), name.trim(), role, stamp, stamp);
+    logActivity('security', `User account created — ${email.trim().toLowerCase()} (${role})`);
+    res.status(201).json({ id: result.lastInsertRowid, email: email.trim().toLowerCase(), name: name.trim(), role });
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'A user with that email already exists.' });
+    throw error;
+  }
+});
+app.patch('/api/users/:id', requireAdministrator, (req, res) => {
+  const current = db.prepare('SELECT id, email, name, role FROM users WHERE id=?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'User account not found.' });
+  const { name = current.name, email = current.email, role = current.role, password = '' } = req.body;
+  if (![name, email].every(required)) return res.status(400).json({ error: 'Name and email are required.' });
+  if (!['Administrator', 'Sub-administrator'].includes(role)) return res.status(400).json({ error: 'Invalid user role.' });
+  if (current.role === 'Administrator' && role !== 'Administrator') {
+    const admins = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='Administrator'").get().count;
+    if (admins <= 1) return res.status(409).json({ error: 'The last Administrator cannot be changed to Sub-administrator.' });
+  }
+  if (String(password) && password.length < 12) return res.status(400).json({ error: 'Use at least 12 characters for the new password.' });
+  try {
+    if (String(password)) {
+      db.prepare('UPDATE users SET name=?, email=?, role=?, password_hash=?, updated_at=? WHERE id=?').run(name.trim(), email.trim().toLowerCase(), role, passwordHash(password), now(), current.id);
+    } else {
+      db.prepare('UPDATE users SET name=?, email=?, role=?, updated_at=? WHERE id=?').run(name.trim(), email.trim().toLowerCase(), role, now(), current.id);
+    }
+    logActivity('security', `User account updated — ${current.email}`);
+    res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users WHERE id=?').get(current.id));
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'A user with that email already exists.' });
+    throw error;
+  }
+});
+app.delete('/api/users/:id', requireAdministrator, (req, res) => {
+  const current = db.prepare('SELECT id, email, name, role FROM users WHERE id=?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'User account not found.' });
+  if (current.id === req.session.user.id) return res.status(409).json({ error: 'You cannot delete the account you are currently using.' });
+  if (current.role === 'Administrator') {
+    const admins = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='Administrator'").get().count;
+    if (admins <= 1) return res.status(409).json({ error: 'The last Administrator cannot be deleted.' });
+  }
+  db.prepare('DELETE FROM users WHERE id=?').run(current.id);
+  logActivity('security', `User account deleted — ${current.email}`);
+  res.json({ ok: true });
 });
 
 app.get('/api/equipment', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM equipment ORDER BY asset_code').all()));
@@ -375,6 +531,7 @@ app.get('/api/insights', requireAuth, (_, res) => {
 
 app.get('/admin.html', (req, res, next) => {
   if (!req.session?.user) return res.redirect('/login.html');
+  if (!['Administrator', 'Sub-administrator'].includes(req.session.user.role)) return res.redirect('/login.html');
   next();
 }, (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.use(express.static(path.join(__dirname, 'public')));
