@@ -6,7 +6,7 @@ const api = async (url, options = {}) => {
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+const escapeHtml = value => String(value ?? '').replace(/[&<>'\"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '\"': '&quot;' }[char]));
 const toast = message => { const node = $('#toast'); if (!node) return; node.textContent = message; node.classList.add('show'); clearTimeout(window.toastTimeout); window.toastTimeout = setTimeout(() => node.classList.remove('show'), 4400); };
 const openModal = id => $(`#${id}`)?.classList.add('show');
 const closeModal = id => $(`#${id}`)?.classList.remove('show');
@@ -182,11 +182,54 @@ function initAdminConsole() {
     $('#guardrail-list').innerHTML = info.guardrails.map((item, index) => `<div class="insight"><b>${['Least necessary access', 'Human approval', 'Auditability'][index]}</b><p>${escapeHtml(item)}</p></div>`).join('');
   }
   async function createComplaint(event, modalId) {
-    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form) || $('button:not([type])', form); if (button) button.disabled = true;
+    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form) || $('button:not([type])', form);
+    if (button) button.disabled = true;
     try { const payload = Object.fromEntries(new FormData(form)); const data = await api('/api/complaints', { method: 'POST', body: JSON.stringify(payload) }); closeModal(modalId); form.reset(); toast(`${data.reference} created successfully.`); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); }
     catch (error) { setError(form, error.message); } finally { if (button) button.disabled = false; }
   }
-  function editComplaint(id) { const item = state.complaints.find(x => x.id === id); if (!item) return; const form = $('#complaint-edit-form'); $('[name="id"]', form).value = item.id; $('[name="status"]', form).value = item.status; $('[name="priority"]', form).value = item.priority; $('[name="assignedTo"]', form).value = item.assigned_to || ''; $('#edit-reference').textContent = `${item.reference} · ${item.location}`; setError(form); openModal('complaint-edit-modal'); }
+  function assignmentDepartments(item) {
+    const type = String(item?.type || '').toLowerCase();
+    const category = String(item?.category || '').toLowerCase();
+    if (category.includes('water')) return ['Waterworks'];
+    if (category.includes('electrical')) return ['Electrical'];
+    if (category.includes('garbage') || category.includes('sanitation')) return ['Sanitation'];
+    if (category.includes('pothole') || category.includes('road')) return ['Roads'];
+    if (type === 'garbage / sanitation') return ['Sanitation'];
+    if (type === 'shop operation') return ['Inspection'];
+    if (type === 'public issue') return ['Roads', 'Inspection', 'Horticulture'];
+    if (type === 'quarter maintenance') return ['Waterworks', 'Electrical', 'Inspection'];
+    return [];
+  }
+
+  function renderAssignmentOptions(form, item) {
+    let control = $('[name="assignedTo"]', form);
+    if (!control) return;
+    if (control.tagName !== 'SELECT') {
+      const select = document.createElement('select');
+      select.name = 'assignedTo';
+      select.setAttribute('aria-label', 'Assign to staff member');
+      control.replaceWith(select);
+      control = select;
+    }
+    const departments = assignmentDepartments(item);
+    const current = item.assigned_to || '';
+    let eligible = state.staff.filter(staff => staff.attendance === 'Present' && departments.includes(String(staff.department || '').trim()));
+    if (current && !eligible.some(staff => staff.name === current)) {
+      const currentStaff = state.staff.find(staff => staff.name === current);
+      if (currentStaff) eligible = [currentStaff, ...eligible];
+    }
+    const unique = eligible.filter((staff, index, rows) => rows.findIndex(row => row.id === staff.id) === index);
+    control.innerHTML = '<option value="">Unassigned</option>' + unique.map(staff => `<option value="${escapeHtml(staff.name)}">${escapeHtml(staff.name)} · ${escapeHtml(staff.designation || staff.department)}</option>`).join('');
+    control.value = current;
+    control.disabled = false;
+    const field = control.closest('.field');
+    if (field) {
+      let hint = $('.assignment-hint', field);
+      if (!hint) { hint = document.createElement('small'); hint.className = 'sub assignment-hint'; field.appendChild(hint); }
+      hint.textContent = unique.length ? `Available ${item.type} staff: ${unique.map(staff => staff.department).filter((value, index, rows) => rows.indexOf(value) === index).join(', ')}` : `No on-duty staff currently match ${item.type}. Update staff attendance or department first.`;
+    }
+  }
+  function editComplaint(id) { const item = state.complaints.find(x => x.id === id); if (!item) return; const form = $('#complaint-edit-form'); $('[name="id"]', form).value = item.id; $('[name="status"]', form).value = item.status; $('[name="priority"]', form).value = item.priority; $('#edit-reference').textContent = `${item.reference} · ${item.location} · ${item.type}${item.category ? ` · ${item.category}` : ''}`; renderAssignmentOptions(form, item); setError(form); openModal('complaint-edit-modal'); }
   async function saveComplaint(event) { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/complaints/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) }); closeModal('complaint-edit-modal'); toast('Complaint updated.'); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); } catch (error) { setError(form, error.message); } }
   function editStaff(id) { const item = state.staff.find(x => x.id === id); if (!item) return; const form = $('#staff-form'); $('[name="id"]', form).value = item.id; $('[name="attendance"]', form).value = item.attendance; $('[name="currentTask"]', form).value = item.current_task || ''; $('#staff-name').textContent = `${item.name} · ${item.department}`; setError(form); openModal('staff-modal'); }
   async function saveStaff(event) { event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/staff/${values.id}`, { method: 'PATCH', body: JSON.stringify(values) }); closeModal('staff-modal'); toast('Staff record updated.'); await Promise.all([loadStaff(), loadSummary()]); } catch (error) { setError(form, error.message); } }
