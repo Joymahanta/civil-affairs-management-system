@@ -4,6 +4,7 @@ const BetterSqlite3 = require('better-sqlite3');
 const express = require('express');
 const expressSession = require('express-session');
 const SqliteStore = require('better-sqlite3-session-store')(expressSession);
+const { installComplaintSmsHooks } = require('./complaint-sms-patch');
 
 const dataDir = path.join(__dirname, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
@@ -207,6 +208,9 @@ express.application.listen = function patchedListen(...args) {
   installSmsRoutes(this);
   return originalListen.apply(this, args);
 };
+
+// Install automatic complaint notifications before server.js registers its routes.
+installComplaintSmsHooks();
 
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
