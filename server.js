@@ -268,8 +268,11 @@ app.post('/api/auth/login', (req, res) => {
   req.session.regenerate(error => {
     if (error) return res.status(500).json({ error: 'Could not create a secure session.' });
     req.session.user = { id: user.id, name: user.name, email: user.email, role: user.role };
-    logActivity('security', `${user.name} signed in to the Civil Office console`);
-    return res.json({ authenticated: true, user: req.session.user });
+    req.session.save(saveError => {
+      if (saveError) return res.status(500).json({ error: 'Could not save your secure session.' });
+      logActivity('security', `${user.name} signed in to the Civil Office console`);
+      return res.json({ authenticated: true, user: req.session.user });
+    });
   });
 });
 app.post('/api/auth/logout', requireAuth, (req, res) => {
@@ -298,9 +301,10 @@ app.get('/api/summary', requireAuth, (_, res) => {
   const staffTotal = db.prepare('SELECT COUNT(*) AS count FROM staff').get().count;
   const equipmentInUse = db.prepare("SELECT COUNT(*) AS count FROM equipment WHERE status = 'In use'").get().count;
   const equipmentTotal = db.prepare('SELECT COUNT(*) AS count FROM equipment').get().count;
+  const completion = 82;
   const priority = db.prepare("SELECT * FROM complaints WHERE status != 'Resolved' ORDER BY CASE priority WHEN 'Urgent' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END, created_at DESC LIMIT 5").all();
   const activity = db.prepare('SELECT * FROM activity ORDER BY created_at DESC LIMIT 5').all();
-  res.json({ open, receivedToday, staffOnDuty, staffTotal, equipmentInUse, equipmentTotal, completion: 82, priority, activity });
+  res.json({ open, receivedToday, staffOnDuty, staffTotal, equipmentInUse, equipmentTotal, completion, priority, activity });
 });
 
 app.get('/api/complaints', requireAuth, (req, res) => {
@@ -329,107 +333,136 @@ app.post('/api/complaints', (req, res) => {
   if (!/^[0-9+\-\s]{8,16}$/.test(reporterPhone.trim())) return res.status(400).json({ error: 'Enter a valid mobile number.' });
   const urgencyWords = /(no water|live wire|fire|flood|danger|emergency)/i;
   const priority = urgencyWords.test(description) ? 'Urgent' : 'Medium';
-  const stamp = now(); const ref = reference();
-  const result = db.prepare(`INSERT INTO complaints (reference,type,category,location,reporter_name,reporter_phone,reporter_email,description,photo_name,latitude,longitude,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(ref, type.trim(), category.trim(), location.trim(), reporterName.trim(), reporterPhone.trim(), reporterEmail.trim(), description.trim(), photoName, latitude, longitude, priority, 'New', stamp, stamp);
-  logActivity('complaint', `${ref} received — ${category} at ${location}`);
-  res.status(201).json({ id: result.lastInsertRowid, reference: ref, priority, status: 'New', message: 'Complaint registered. SMS and email notification queued.' });
+  const stamp = now();
+  const referenceNo = reference();
+  db.prepare(`INSERT INTO complaints (reference,type,category,location,reporter_name,reporter_phone,reporter_email,description,photo_name,latitude,longitude,priority,status,assigned_to,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(referenceNo, type, category, location, reporterName.trim(), reporterPhone.trim(), reporterEmail.trim(), description.trim(), photoName, latitude, longitude, priority, 'New', null, stamp, stamp);
+  logActivity('complaint', `${referenceNo} received — ${category}`);
+  res.status(201).json({ reference: referenceNo, priority, status: 'New' });
 });
 
 app.patch('/api/complaints/:id', requireAuth, (req, res) => {
-  const current = db.prepare('SELECT * FROM complaints WHERE id = ?').get(req.params.id);
+  const id = Number(req.params.id);
+  const current = db.prepare('SELECT * FROM complaints WHERE id=?').get(id);
   if (!current) return res.status(404).json({ error: 'Complaint not found.' });
-  const { status = current.status, priority = current.priority, assignedTo = current.assigned_to } = req.body;
-  const allowedStatuses = ['New', 'Assigned', 'In progress', 'Resolved'];
-  const allowedPriorities = ['Low', 'Medium', 'High', 'Urgent'];
-  if (!allowedStatuses.includes(status) || !allowedPriorities.includes(priority)) return res.status(400).json({ error: 'Invalid status or priority.' });
-  db.prepare('UPDATE complaints SET status=?, priority=?, assigned_to=?, updated_at=? WHERE id=?').run(status, priority, assignedTo || null, now(), current.id);
-  logActivity('update', `${current.reference} updated to ${status}${assignedTo ? ` — assigned to ${assignedTo}` : ''}`);
-  res.json(db.prepare('SELECT * FROM complaints WHERE id = ?').get(current.id));
+  const allowed = ['priority', 'status', 'assigned_to', 'category', 'location', 'description'];
+  const updates = []; const values = [];
+  allowed.forEach(field => { if (Object.prototype.hasOwnProperty.call(req.body, field)) { updates.push(`${field}=?`); values.push(req.body[field]); } });
+  if (!updates.length) return res.status(400).json({ error: 'No complaint changes were provided.' });
+  updates.push('updated_at=?'); values.push(now(), id);
+  db.prepare(`UPDATE complaints SET ${updates.join(', ')} WHERE id=?`).run(...values);
+  logActivity('complaint', `${current.reference} updated by ${req.session.user.name}`);
+  res.json(db.prepare('SELECT * FROM complaints WHERE id=?').get(id));
 });
 
-app.get('/api/designations', requireAuth, (_, res) => res.json(db.prepare('SELECT d.*, COUNT(s.id) AS staff_count FROM designations d LEFT JOIN staff s ON s.designation_id = d.id GROUP BY d.id ORDER BY d.name').all()));
-app.post('/api/designations', requireAdministrator, (req, res) => {
+app.get('/api/staff', requireAuth, (_, res) => {
+  res.json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id = s.designation_id ORDER BY s.id`).all());
+});
+app.post('/api/staff', requireAuth, (req, res) => {
+  const { name, designationId = null, department, phone, attendance = 'Present', currentTask = '' } = req.body;
+  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Name, department, and phone are required.' });
+  const designation = designationId ? db.prepare('SELECT id FROM designations WHERE id=?').get(Number(designationId)) : null;
+  if (designationId && !designation) return res.status(400).json({ error: 'Selected designation does not exist.' });
+  const result = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)').run(name.trim(), designation?.id || null, department.trim(), phone.trim(), attendance, currentTask.trim());
+  logActivity('staff', `${name.trim()} added to the workforce`);
+  res.status(201).json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?`).get(result.lastInsertRowid));
+});
+app.patch('/api/staff/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const current = db.prepare('SELECT * FROM staff WHERE id=?').get(id);
+  if (!current) return res.status(404).json({ error: 'Staff member not found.' });
+  const map = { name: 'name', designationId: 'designation_id', department: 'department', phone: 'phone', attendance: 'attendance', currentTask: 'current_task' };
+  const updates = []; const values = [];
+  Object.entries(map).forEach(([input, column]) => {
+    if (Object.prototype.hasOwnProperty.call(req.body, input)) {
+      if (input === 'designationId') {
+        const value = req.body[input] === '' || req.body[input] === null ? null : Number(req.body[input]);
+        if (value !== null && !db.prepare('SELECT id FROM designations WHERE id=?').get(value)) return;
+        updates.push(`${column}=?`); values.push(value);
+      } else {
+        updates.push(`${column}=?`); values.push(typeof req.body[input] === 'string' ? req.body[input].trim() : req.body[input]);
+      }
+    }
+  });
+  if (!updates.length) return res.status(400).json({ error: 'No staff changes were provided.' });
+  values.push(id);
+  db.prepare(`UPDATE staff SET ${updates.join(', ')} WHERE id=?`).run(...values);
+  res.json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?`).get(id));
+});
+
+app.get('/api/designations', requireAuth, (_, res) => {
+  res.json(db.prepare('SELECT d.*, COUNT(s.id) AS staff_count FROM designations d LEFT JOIN staff s ON s.designation_id=d.id GROUP BY d.id ORDER BY d.name').all());
+});
+app.post('/api/designations', requireAuth, (req, res) => {
   const { name, description = '' } = req.body;
   if (!required(name)) return res.status(400).json({ error: 'Designation name is required.' });
   try {
     const stamp = now();
-    const result = db.prepare('INSERT INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name.trim(), String(description).trim() || null, stamp, stamp);
-    logActivity('staff', `Designation created — ${name.trim()}`);
-    res.status(201).json(db.prepare('SELECT * FROM designations WHERE id=?').get(result.lastInsertRowid));
+    const result = db.prepare('INSERT INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name.trim(), description.trim(), stamp, stamp);
+    res.status(201).json(db.prepare('SELECT d.*, 0 AS staff_count FROM designations d WHERE id=?').get(result.lastInsertRowid));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
     throw error;
   }
 });
-app.patch('/api/designations/:id', requireAdministrator, (req, res) => {
-  const current = db.prepare('SELECT * FROM designations WHERE id=?').get(req.params.id);
+app.patch('/api/designations/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const current = db.prepare('SELECT * FROM designations WHERE id=?').get(id);
   if (!current) return res.status(404).json({ error: 'Designation not found.' });
-  const { name = current.name, description = current.description || '' } = req.body;
-  if (!required(name)) return res.status(400).json({ error: 'Designation name is required.' });
+  const name = required(req.body.name) ? req.body.name.trim() : current.name;
+  const description = typeof req.body.description === 'string' ? req.body.description.trim() : current.description || '';
   try {
-    db.prepare('UPDATE designations SET name=?, description=?, updated_at=? WHERE id=?').run(name.trim(), String(description).trim() || null, now(), current.id);
-    logActivity('staff', `Designation updated — ${name.trim()}`);
-    res.json(db.prepare('SELECT * FROM designations WHERE id=?').get(current.id));
+    db.prepare('UPDATE designations SET name=?, description=?, updated_at=? WHERE id=?').run(name, description, now(), id);
+    res.json(db.prepare('SELECT d.*, (SELECT COUNT(*) FROM staff WHERE designation_id=d.id) AS staff_count FROM designations d WHERE d.id=?').get(id));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
     throw error;
   }
 });
-app.delete('/api/designations/:id', requireAdministrator, (req, res) => {
-  const current = db.prepare('SELECT * FROM designations WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'Designation not found.' });
-  const assigned = db.prepare('SELECT COUNT(*) AS count FROM staff WHERE designation_id=?').get(current.id).count;
-  if (assigned > 0) return res.status(409).json({ error: 'This designation is assigned to staff. Reassign them before deleting it.' });
-  db.prepare('DELETE FROM designations WHERE id=?').run(current.id);
-  logActivity('staff', `Designation deleted — ${current.name}`);
+app.delete('/api/designations/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const count = db.prepare('SELECT COUNT(*) AS count FROM staff WHERE designation_id=?').get(id).count;
+  if (count > 0) return res.status(409).json({ error: 'This designation is assigned to staff and cannot be deleted.' });
+  const result = db.prepare('DELETE FROM designations WHERE id=?').run(id);
+  if (!result.changes) return res.status(404).json({ error: 'Designation not found.' });
   res.json({ ok: true });
 });
 
-app.get('/api/staff', requireAuth, (_, res) => res.json(db.prepare('SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id ORDER BY s.name').all()));
-app.post('/api/staff', requireAuth, (req, res) => {
-  const { name, designationId = '', department, phone, attendance = 'Present', currentTask = '' } = req.body;
-  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Name, department and phone are required.' });
-  if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
-  if (designationId) {
-    const designation = db.prepare('SELECT id FROM designations WHERE id=?').get(designationId);
-    if (!designation) return res.status(400).json({ error: 'Selected designation was not found.' });
-  }
-  const result = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)').run(name.trim(), designationId ? Number(designationId) : null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null);
-  logActivity('staff', `Staff member added — ${name.trim()}`);
-  res.status(201).json(db.prepare('SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?').get(result.lastInsertRowid));
-});
-app.patch('/api/staff/:id', requireAuth, (req, res) => {
-  const current = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'Staff member not found.' });
-  const { name = current.name, designationId = current.designation_id || '', department = current.department, phone = current.phone, attendance = current.attendance, currentTask = current.current_task } = req.body;
-  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Name, department and phone are required.' });
-  if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
-  if (designationId) {
-    const designation = db.prepare('SELECT id FROM designations WHERE id=?').get(designationId);
-    if (!designation) return res.status(400).json({ error: 'Selected designation was not found.' });
-  }
-  db.prepare('UPDATE staff SET name=?, designation_id=?, department=?, phone=?, attendance=?, current_task=? WHERE id=?').run(name.trim(), designationId ? Number(designationId) : null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null, current.id);
-  logActivity('staff', `${current.name} updated — ${attendance}`);
-  res.json(db.prepare('SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?').get(current.id));
-});
-app.post('/api/staff/sms', requireAuth, (req, res) => {
-  const { message } = req.body;
-  if (!required(message)) return res.status(400).json({ error: 'SMS message cannot be empty.' });
-  const stamp = now(); const result = db.prepare("UPDATE staff SET last_sms_at=? WHERE attendance='Present'").run(stamp);
-  logActivity('sms', `SMS task update sent to ${result.changes} on-duty staff`);
-  res.json({ sent: result.changes, message: 'SMS dispatch recorded for on-duty staff.' });
+app.get('/api/equipment', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM equipment ORDER BY id').all()));
+app.patch('/api/equipment/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const fields = ['holder', 'issued_on', 'expected_return', 'condition', 'status'];
+  const updates = []; const values = [];
+  fields.forEach(field => { if (Object.prototype.hasOwnProperty.call(req.body, field)) { updates.push(`${field}=?`); values.push(req.body[field]); } });
+  if (!updates.length) return res.status(400).json({ error: 'No equipment changes were provided.' });
+  values.push(id);
+  db.prepare(`UPDATE equipment SET ${updates.join(', ')} WHERE id=?`).run(...values);
+  res.json(db.prepare('SELECT * FROM equipment WHERE id=?').get(id));
 });
 
-app.get('/api/users', requireAdministrator, (_, res) => res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users ORDER BY name').all()));
+app.get('/api/tenders', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM tenders ORDER BY id DESC').all()));
+app.patch('/api/tenders/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const fields = ['closing_date', 'bids', 'status', 'scope'];
+  const updates = []; const values = [];
+  fields.forEach(field => { if (Object.prototype.hasOwnProperty.call(req.body, field)) { updates.push(`${field}=?`); values.push(req.body[field]); } });
+  if (!updates.length) return res.status(400).json({ error: 'No tender changes were provided.' });
+  values.push(id);
+  db.prepare(`UPDATE tenders SET ${updates.join(', ')} WHERE id=?`).run(...values);
+  res.json(db.prepare('SELECT * FROM tenders WHERE id=?').get(id));
+});
+
+app.get('/api/users', requireAdministrator, (_, res) => {
+  res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users ORDER BY lower(name), id').all());
+});
 app.post('/api/users', requireAdministrator, (req, res) => {
-  const { email, name, role = 'Sub-administrator', password } = req.body;
-  if (![email, name, password].every(required)) return res.status(400).json({ error: 'Name, email and password are required.' });
-  if (!['Administrator', 'Sub-administrator'].includes(role)) return res.status(400).json({ error: 'Invalid user role.' });
+  const { email, name, password, role = 'Sub-administrator' } = req.body;
+  if (![email, name, password].every(required)) return res.status(400).json({ error: 'Name, email, and password are required.' });
   if (password.length < 12) return res.status(400).json({ error: 'Use at least 12 characters for the password.' });
+  if (!['Administrator', 'Sub-administrator'].includes(role)) return res.status(400).json({ error: 'Invalid user role.' });
   try {
     const stamp = now();
-    const result = db.prepare('INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(email.trim().toLowerCase(), passwordHash(password), name.trim(), role, stamp, stamp);
-    logActivity('security', `User created — ${email.trim().toLowerCase()} (${role})`);
+    const result = db.prepare('INSERT INTO users (email, password_hash, name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(email.trim(), passwordHash(password), name.trim(), role, stamp, stamp);
+    logActivity('security', `${name.trim()} created as ${role}`);
     res.status(201).json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users WHERE id=?').get(result.lastInsertRowid));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'A user with that email already exists.' });
@@ -437,88 +470,77 @@ app.post('/api/users', requireAdministrator, (req, res) => {
   }
 });
 app.patch('/api/users/:id', requireAdministrator, (req, res) => {
-  const current = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'User not found.' });
-  const { name = current.name, email = current.email, role = current.role, password = '' } = req.body;
-  if (![name, email].every(required)) return res.status(400).json({ error: 'Name and email are required.' });
-  if (!['Administrator', 'Sub-administrator'].includes(role)) return res.status(400).json({ error: 'Invalid user role.' });
-  if (current.role === 'Administrator' && role !== 'Administrator') return res.status(403).json({ error: 'Administrator accounts cannot be demoted.' });
-  if (current.id === req.session.user.id && role !== current.role) return res.status(403).json({ error: 'You cannot change your own role.' });
-  if (password && password.length < 12) return res.status(400).json({ error: 'Use at least 12 characters for the new password.' });
-  const nextHash = password ? passwordHash(password) : current.password_hash;
+  const id = Number(req.params.id);
+  const target = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (req.body.role && !['Administrator', 'Sub-administrator'].includes(req.body.role)) return res.status(400).json({ error: 'Invalid user role.' });
+  if (req.body.role && id === req.session.user.id && req.body.role !== req.session.user.role) return res.status(403).json({ error: 'You cannot change your own role.' });
+  if (target.role === 'Administrator' && req.body.role === 'Sub-administrator') return res.status(403).json({ error: 'Administrator accounts cannot be demoted here.' });
+  const fields = []; const values = [];
+  if (required(req.body.name)) { fields.push('name=?'); values.push(req.body.name.trim()); }
+  if (required(req.body.email)) { fields.push('email=?'); values.push(req.body.email.trim()); }
+  if (req.body.role) { fields.push('role=?'); values.push(req.body.role); }
+  if (required(req.body.password)) {
+    if (req.body.password.length < 12) return res.status(400).json({ error: 'Use at least 12 characters for the password.' });
+    fields.push('password_hash=?'); values.push(passwordHash(req.body.password));
+  }
+  if (!fields.length) return res.status(400).json({ error: 'No user changes were provided.' });
+  fields.push('updated_at=?'); values.push(now(), id);
   try {
-    db.prepare('UPDATE users SET name=?, email=?, role=?, password_hash=?, updated_at=? WHERE id=?').run(name.trim(), email.trim().toLowerCase(), role, nextHash, now(), current.id);
-    logActivity('security', `User updated — ${email.trim().toLowerCase()}`);
-    res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users WHERE id=?').get(current.id));
+    db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id=?`).run(...values);
+    res.json(db.prepare('SELECT id, email, name, role, created_at, updated_at FROM users WHERE id=?').get(id));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'A user with that email already exists.' });
     throw error;
   }
 });
 app.delete('/api/users/:id', requireAdministrator, (req, res) => {
-  const current = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'User not found.' });
-  if (current.id === req.session.user.id) return res.status(403).json({ error: 'You cannot delete your own account.' });
-  if (current.role === 'Administrator') {
-    const admins = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='Administrator'").get().count;
-    if (admins <= 1) return res.status(409).json({ error: 'The last Administrator account cannot be deleted.' });
-    return res.status(403).json({ error: 'Administrator accounts cannot be deleted here.' });
-  }
-  db.prepare('DELETE FROM users WHERE id=?').run(current.id);
-  logActivity('security', `User deleted — ${current.email}`);
+  const id = Number(req.params.id);
+  if (id === req.session.user.id) return res.status(403).json({ error: 'You cannot delete your own account.' });
+  const target = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.role === 'Administrator') return res.status(403).json({ error: 'Administrator accounts cannot be deleted here.' });
+  const adminCount = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='Administrator'").get().count;
+  if (target.role === 'Administrator' && adminCount <= 1) return res.status(403).json({ error: 'The last Administrator cannot be deleted.' });
+  db.prepare('DELETE FROM users WHERE id=?').run(id);
   res.json({ ok: true });
 });
 
-app.get('/api/equipment', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM equipment ORDER BY asset_code').all()));
-app.patch('/api/equipment/:id', requireAuth, (req, res) => {
-  const current = db.prepare('SELECT * FROM equipment WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'Equipment item not found.' });
-  const { holder = current.holder, expectedReturn = current.expected_return, condition = current.condition, status = current.status } = req.body;
-  const statuses = ['Available', 'In use', 'Review', 'Repair'];
-  if (!statuses.includes(status)) return res.status(400).json({ error: 'Invalid equipment status.' });
-  const issuedOn = status === 'In use' && !current.issued_on ? new Date().toISOString().slice(0, 10) : current.issued_on;
-  const nextHolder = status === 'Available' ? null : holder;
-  db.prepare('UPDATE equipment SET holder=?, issued_on=?, expected_return=?, condition=?, status=? WHERE id=?').run(nextHolder, issuedOn, expectedReturn || null, condition, status, current.id);
-  logActivity('equipment', `${current.asset_code} marked ${status}${nextHolder ? ` — allocated to ${nextHolder}` : ''}`);
-  res.json(db.prepare('SELECT * FROM equipment WHERE id=?').get(current.id));
-});
-
-app.get('/api/tenders', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM tenders ORDER BY created_at DESC').all()));
-app.post('/api/tenders', requireAuth, (req, res) => {
-  const { scope, closingDate } = req.body;
-  if (!required(scope) || !required(closingDate)) return res.status(400).json({ error: 'Scope and closing date are required.' });
-  const count = db.prepare('SELECT COUNT(*) AS count FROM tenders').get().count;
-  const no = `STPS/T/${String(new Date().getFullYear()).slice(-2)}/${String(34 + count + 1).padStart(3, '0')}`;
-  const created = now();
-  const result = db.prepare('INSERT INTO tenders (tender_no, scope, closing_date, bids, status, created_at) VALUES (?,?,?,?,?,?)').run(no, scope.trim(), closingDate, 0, 'Draft', created);
-  logActivity('tender', `${no} created — ${scope}`);
-  res.status(201).json(db.prepare('SELECT * FROM tenders WHERE id=?').get(result.lastInsertRowid));
-});
-app.patch('/api/tenders/:id', requireAuth, (req, res) => {
-  const current = db.prepare('SELECT * FROM tenders WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'Tender not found.' });
-  const { status = current.status, bids = current.bids } = req.body;
-  if (!['Draft', 'Open', 'Evaluation', 'Awarded', 'Closed'].includes(status)) return res.status(400).json({ error: 'Invalid tender status.' });
-  db.prepare('UPDATE tenders SET status=?, bids=? WHERE id=?').run(status, Number(bids) || 0, current.id);
-  logActivity('tender', `${current.tender_no} moved to ${status}`);
-  res.json(db.prepare('SELECT * FROM tenders WHERE id=?').get(current.id));
-});
-
 app.get('/api/insights', requireAuth, (_, res) => {
-  const patterns = db.prepare("SELECT category, COUNT(*) AS count FROM complaints WHERE status != 'Resolved' GROUP BY category ORDER BY count DESC LIMIT 4").all();
-  const trend = patterns.map((row, i) => ({ ...row, change: [43, 18, -12, 8][i] || 5 }));
-  const focus = db.prepare("SELECT location, category, COUNT(*) AS count FROM complaints WHERE status != 'Resolved' GROUP BY location, category ORDER BY count DESC LIMIT 1").get();
-  res.json({ trend, focus, generatedAt: now(), guardrails: ['Resident contact details are visible only to authorized staff.', 'AI suggests categories and priorities; staff approve every action.', 'Every operational update is retained in the audit log.'] });
+  const byCategory = db.prepare('SELECT category, COUNT(*) AS count FROM complaints GROUP BY category ORDER BY count DESC').all();
+  const byStatus = db.prepare('SELECT status, COUNT(*) AS count FROM complaints GROUP BY status ORDER BY count DESC').all();
+  res.json({ byCategory, byStatus });
 });
 
-app.get('/admin.html', (req, res, next) => {
-  if (!req.session?.user) return res.redirect('/login.html');
-  next();
-}, (_, res) => {
-  const file = path.join(__dirname, 'public', 'admin.html');
-  const html = fs.readFileSync(file, 'utf8').replace('</body>', '<script src="/access-management.js"></script></body>');
-  res.type('html').send(html);
-});
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.listen(PORT, () => console.log(`Civil Affairs is running at http://localhost:${PORT}`));
+
+function renderAdminPage(fileName) {
+  const filePath = path.join(__dirname, 'public', fileName);
+  let html = fs.readFileSync(filePath, 'utf8');
+  const accessScript = '<script src="/access-management.js"></script>';
+  if (!html.includes('/access-management.js')) html = html.replace('</body>', `${accessScript}</body>`);
+  return html;
+}
+
+app.get('/admin.html', requireAuth, (req, res) => {
+  res.type('html').send(renderAdminPage('admin.html'));
+});
+app.get('/admin', requireAuth, (req, res) => {
+  res.type('html').send(renderAdminPage('admin.html'));
+});
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  const target = req.path === '/' ? 'index.html' : req.path.slice(1);
+  const safeTarget = path.normalize(target).replace(/^([.][.][/\\])+/, '');
+  const filePath = path.join(__dirname, 'public', safeTarget);
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return res.sendFile(filePath);
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.use((error, req, res, next) => {
+  console.error(error);
+  if (res.headersSent) return next(error);
+  res.status(500).json({ error: 'Unexpected server error.' });
+});
+
+app.listen(PORT, () => console.log(`Civil Affairs server listening on ${PORT}`));
