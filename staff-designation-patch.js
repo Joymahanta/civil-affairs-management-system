@@ -9,8 +9,8 @@ db.pragma('foreign_keys = ON');
 
 function repairLegacyDesignations() {
   const mappings = [
-    [['waterworks', 'water supply'], 'Waterworks Supervisor'],
-    [['electrical', 'electrician', 'electric'], 'Electrical Supervisor'],
+    [['waterworks', 'water', 'water supply'], 'Waterworks Supervisor'],
+    [['electrical', 'electric', 'electrician'], 'Electrical Supervisor'],
     [['sanitation', 'garbage', 'waste'], 'Sanitation Officer'],
     [['inspection', 'inspector'], 'Field Inspector'],
     [['roads', 'road'], 'Junior Engineer'],
@@ -19,17 +19,19 @@ function repairLegacyDesignations() {
 
   const update = db.prepare('UPDATE staff SET designation_id=? WHERE id=?');
   const findDesignation = db.prepare('SELECT id FROM designations WHERE lower(name)=lower(?)');
-  const staff = db.prepare(`SELECT s.id, s.department, d.name AS designation
+  const staff = db.prepare(`SELECT s.id, s.department, s.designation_id, d.name AS designation_name
     FROM staff s LEFT JOIN designations d ON d.id=s.designation_id`).all();
 
   db.transaction(() => {
     for (const person of staff) {
       const department = String(person.department || '').trim().toLowerCase();
-      if (!department || person.designation && person.designation.toLowerCase() !== 'unassigned') continue;
+      const designation = String(person.designation_name || '').trim().toLowerCase();
+      const needsRepair = !person.designation_id || !designation || designation === 'unassigned';
+      if (!department || !needsRepair) continue;
       const match = mappings.find(([aliases]) => aliases.some(alias => department.includes(alias)));
       if (!match) continue;
-      const designation = findDesignation.get(match[1]);
-      if (designation) update.run(designation.id, person.id);
+      const target = findDesignation.get(match[1]);
+      if (target) update.run(target.id, person.id);
     }
   })();
 }
