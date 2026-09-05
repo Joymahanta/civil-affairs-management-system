@@ -8,6 +8,7 @@ const crypto = require('crypto');
 
 const app = express();
 app.set('trust proxy', 1);
+
 const PORT = Number(process.env.PORT || 3000);
 const dataDir = path.join(__dirname, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
