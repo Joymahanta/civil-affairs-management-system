@@ -10,13 +10,6 @@ fs.mkdirSync(dataDir, { recursive: true });
 const sessionDb = new BetterSqlite3(path.join(dataDir, 'civil-affairs.db'));
 sessionDb.pragma('journal_mode = WAL');
 
-// Optional emergency administrator password reset. Set ADMIN_RESET_PASSWORD in the
-// service environment, deploy/restart once, sign in with the new password, then remove
-// the environment variable so it cannot be applied again.
-if (process.env.ADMIN_RESET_PASSWORD) {
-  require('./admin-password-reset.js');
-}
-
 // Authentication/session responses must never be converted into HTTP 304 responses.
 // The frontend expects a JSON body from /api/auth/session; a body-less 304 is treated
 // as an auth failure and can cause the login <-> admin redirect loop.
@@ -49,3 +42,12 @@ function patchedSession(options = {}) {
 
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
+
+// Optional emergency administrator password reset.
+// This MUST run after server.js has initialized the application schema and seeded
+// the Administrator account; otherwise a fresh SQLite database has no users table yet.
+// Set ADMIN_RESET_PASSWORD in the service environment, deploy/restart once, sign in
+// with the new password, then remove the environment variable so it cannot be reapplied.
+if (process.env.ADMIN_RESET_PASSWORD) {
+  require('./admin-password-reset.js');
+}
