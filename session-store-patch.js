@@ -26,10 +26,36 @@ express.response.send = function sendWithoutAuthCaching(body) {
     this.set('Expires', '0');
   }
   if (isAdminHtml && typeof body === 'string' && !body.includes('/complaint-history.js')) {
-    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script><script src="/workforce-form-patch.js"></script></body>');
+    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script><script src="/workforce-form-patch.js" defer></script></body>');
     this.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   }
   return originalSend.call(this, body);
+};
+
+// Express sendFile is used by the protected /admin.html route, so inject the
+// workforce editor patch there as well. This makes the dropdown/editor fix
+// reliable even when res.send() is not involved.
+const originalSendFile = express.response.sendFile;
+express.response.sendFile = function patchedSendFile(filePath, options, callback) {
+  const req = this.req;
+  const isAdminHtml = req && req.path === '/admin.html' && typeof filePath === 'string' && /(?:^|[\\/])admin\.html$/.test(filePath);
+  if (!isAdminHtml) return originalSendFile.call(this, filePath, options, callback);
+  const cb = typeof options === 'function' ? options : callback;
+  fs.readFile(filePath, 'utf8', (error, body) => {
+    if (error) {
+      if (typeof cb === 'function') cb(error);
+      else this.status(500).end();
+      return;
+    }
+    if (!body.includes('/workforce-form-patch.js')) {
+      body = body.replace('</body>', '<script src="/workforce-form-patch.js"></script></body>');
+    }
+    this.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    this.type('html');
+    this.send(body);
+    if (typeof cb === 'function') cb();
+  });
+  return this;
 };
 
 function patchedSession(options = {}) {
@@ -133,7 +159,6 @@ function installSmsRoutes(app) {
 }
 
 // Complaint SMS must be installed BEFORE server.js registers its complaint routes.
-// The hook wraps route registration; installing it afterward cannot affect routes already registered.
 installComplaintSmsHooks();
 
 const originalListen = express.application.listen;
