@@ -6,6 +6,7 @@ const expressSession = require('express-session');
 const SqliteStore = require('better-sqlite3-session-store')(expressSession);
 const { installComplaintSmsHooks } = require('./complaint-sms-patch');
 const { installComplaintHistoryHooks } = require('./complaint-history-patch');
+const { installStaffDesignationRepair } = require('./staff-designation-patch');
 
 const dataDir = path.join(__dirname, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
@@ -108,8 +109,7 @@ function installSmsRoutes(app) {
 
   app.get('/api/staff/sms/history', (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS history.' });
-    const rows = sessionDb.prepare('SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id, s.created_at, st.name AS staff_name FROM sms_jobs s LEFT JOIN staff st ON st.id=s.staff_id ORDER BY s.id DESC LIMIT 100').all();
-    res.json(rows);
+    res.json(sessionDb.prepare('SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id, s.created_at, st.name AS staff_name FROM sms_jobs s LEFT JOIN staff st ON st.id=s.staff_id ORDER BY s.id DESC LIMIT 100').all());
   });
 
   app.post('/api/staff/sms/sync', async (req, res) => {
@@ -138,9 +138,11 @@ function installSmsRoutes(app) {
 const originalListen = express.application.listen;
 express.application.listen = function patchedListen(...args) { installSmsRoutes(this); return originalListen.apply(this, args); };
 
-// Core schema must be created by server.js before complaint history can inspect it.
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
+
+// server.js creates designations and staff tables; repair legacy staff records afterward.
+installStaffDesignationRepair();
 installComplaintSmsHooks();
 installComplaintHistoryHooks();
 
