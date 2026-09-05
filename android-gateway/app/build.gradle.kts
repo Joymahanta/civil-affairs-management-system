@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.civilaﬀairs.gateway"
+    namespace = "com.civilaffairs.gateway"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.civilaﬀairs.gateway"
+        applicationId = "com.civilaffairs.gateway"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
