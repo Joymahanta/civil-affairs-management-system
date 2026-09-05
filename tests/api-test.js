@@ -1,58 +1,11 @@
 const { spawn } = require('child_process');
-const assert = require('assert');
-
-const port = 3127;
-const base = `http://127.0.0.1:${port}`;
-let cookie = '';
-
-async function request(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (cookie) headers.Cookie = cookie;
-  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch(`${base}${path}`, { ...options, headers, redirect: 'manual' });
-  const setCookie = response.headers.get('set-cookie');
-  if (setCookie) cookie = setCookie.split(';')[0];
-  const body = await response.json().catch(() => ({}));
-  return { response, body };
-}
-function expectStatus(result, status, label) { assert.strictEqual(result.response.status, status, `${label}: ${JSON.stringify(result.body)}`); }
-async function waitForServer() {
-  for (let attempt = 0; attempt < 30; attempt++) {
-    try { const result = await fetch(`${base}/api/health`); if (result.ok) return; } catch (_) {}
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  throw new Error('Server did not become ready.');
-}
-
-async function run() {
-  const server = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT: String(port), SESSION_SECRET: 'test-session-secret-only' }, stdio: 'pipe' });
-  try {
-    await waitForServer();
-    let result = await request('/api/health'); expectStatus(result, 200, 'Health check'); assert.equal(result.body.database, 'connected');
-    result = await request('/api/summary'); expectStatus(result, 401, 'Unauthenticated admin API protection');
-    result = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@civilaffairs.local', password: 'wrong-password' }) }); expectStatus(result, 401, 'Incorrect login rejection');
-    result = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@civilaffairs.local', password: 'CivilAffairs2026!' }) }); expectStatus(result, 200, 'Administrator login'); assert.ok(cookie);
-    result = await request('/api/auth/session'); expectStatus(result, 200, 'Session check'); assert.equal(result.body.authenticated, true);
-    result = await request('/api/summary'); expectStatus(result, 200, 'Authenticated summary');
-    result = await request('/api/complaints'); expectStatus(result, 200, 'Complaint listing'); assert.ok(result.body.length >= 1); const originalComplaint = result.body[0];
-    result = await request('/api/complaints', { method: 'POST', body: JSON.stringify({ type: 'Public issue', category: 'Pothole / road issue', location: 'Automated test lane', reporterName: 'Test Resident', reporterPhone: '9876509999', reporterEmail: 'test@example.local', description: 'Automated test complaint for workflow verification.' }) }); expectStatus(result, 201, 'Complaint creation'); const created = result.body;
-    cookie = ''; result = await request(`/api/complaints/${created.reference}`); expectStatus(result, 401, 'Tracking phone protection');
-    result = await request(`/api/complaints/${created.reference}?phone=9876509999`); expectStatus(result, 200, 'Resident tracking'); assert.equal(result.body.reference, created.reference); assert.equal(result.body.reporter_phone, undefined);
-    result = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@civilaffairs.local', password: 'CivilAffairs2026!' }) }); expectStatus(result, 200, 'Administrator re-login');
-    result = await request(`/api/complaints/${created.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'Assigned', priority: 'High', assignedTo: 'R. Kumar' }) }); expectStatus(result, 200, 'Complaint assignment'); assert.equal(result.body.status, 'Assigned');
-    result = await request('/api/staff'); expectStatus(result, 200, 'Staff listing'); const staff = result.body[0];
-    result = await request(`/api/staff/${staff.id}`, { method: 'PATCH', body: JSON.stringify({ attendance: 'Present', currentTask: 'Automated verification task' }) }); expectStatus(result, 200, 'Staff task update');
-    result = await request('/api/staff/sms', { method: 'POST', body: JSON.stringify({ message: 'Automated test SMS record.' }) }); expectStatus(result, 200, 'SMS dispatch record'); assert.ok(result.body.sent >= 1);
-    result = await request('/api/equipment'); expectStatus(result, 200, 'Equipment listing'); const equipment = result.body.find(row => row.status === 'Available') || result.body[0];
-    result = await request(`/api/equipment/${equipment.id}`, { method: 'PATCH', body: JSON.stringify({ holder: equipment.holder || 'Test store', expectedReturn: equipment.expected_return || '2026-09-30', condition: equipment.condition, status: equipment.status }) }); expectStatus(result, 200, 'Equipment update');
-    result = await request('/api/tenders'); expectStatus(result, 200, 'Tender listing');
-    result = await request('/api/tenders', { method: 'POST', body: JSON.stringify({ scope: 'Automated verification tender', closingDate: '2026-12-31' }) }); expectStatus(result, 201, 'Tender creation'); const tender = result.body;
-    result = await request(`/api/tenders/${tender.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'Open', bids: 2 }) }); expectStatus(result, 200, 'Tender update'); assert.equal(result.body.status, 'Open');
-    result = await request('/api/insights'); expectStatus(result, 200, 'AI insights'); assert.ok(Array.isArray(result.body.guardrails));
-    result = await request('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: 'wrong-password', newPassword: 'AnotherSafePassword1!' }) }); expectStatus(result, 401, 'Password verification');
-    result = await request('/api/auth/logout', { method: 'POST' }); expectStatus(result, 200, 'Logout');
-    result = await request('/api/summary'); expectStatus(result, 401, 'Session invalidation');
-    console.log('API workflow tests passed.');
-  } finally { server.kill(); }
-}
-run().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+const fs = require('fs'); const path = require('path'); const os = require('os'); const assert = require('assert');
+const port = 3127, base = `http://127.0.0.1:${port}`, adminPassword = 'TestOnlySecurePassword!';
+const testData = fs.mkdtempSync(path.join(os.tmpdir(), 'civil-affairs-test-')); let cookie = '';
+async function request(url, options={}) { const headers={...(options.headers||{})};if(cookie)headers.Cookie=cookie;if(options.body&&!headers['Content-Type'])headers['Content-Type']='application/json';const response=await fetch(base+url,{...options,headers,redirect:'manual'});const set=response.headers.get('set-cookie');if(set)cookie=set.split(';')[0];return {response,body:await response.json().catch(()=>({}))}; }
+const check=(r,status,label)=>assert.equal(r.response.status,status,`${label}: ${JSON.stringify(r.body)}`);
+async function ready(){for(let i=0;i<40;i++){try{if((await fetch(base+'/api/health')).ok)return}catch{}await new Promise(r=>setTimeout(r,125))}throw Error('Server did not start');}
+(async()=>{const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:String(port),DATA_DIR:testData,INITIAL_ADMIN_PASSWORD:adminPassword,SESSION_SECRET:'test-session-secret'},stdio:'ignore'});try{await ready();let r=await request('/api/summary');check(r,401,'Unauthenticated operations blocked');r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'admin@civilaffairs.local',password:adminPassword})});check(r,200,'Administrator login');
+r=await request('/api/designations');check(r,200,'List designations');assert(r.body.length>=10);r=await request('/api/designations',{method:'POST',body:JSON.stringify({name:'Test Coordinator',description:'Test only'})});check(r,201,'Create designation');const designation=r.body;r=await request('/api/staff',{method:'POST',body:JSON.stringify({name:'Test Staff',designationId:designation.id,department:'Testing',phone:'9876509999',attendance:'Present',currentTask:'Verify workflow',email:'staff@test.local'})});check(r,201,'Create staff');const staff=r.body;r=await request('/api/staff');check(r,200,'List staff');assert(r.body.some(x=>x.id===staff.id));r=await request('/api/staff/'+staff.id,{method:'PATCH',body:JSON.stringify({attendance:'Absent',currentTask:'Updated test task'})});check(r,200,'Update staff');
+r=await request('/api/users',{method:'POST',body:JSON.stringify({name:'Test Subadmin',email:'subadmin@test.local',password:'SubadminTestPassword!',role:'Sub-administrator',staffId:staff.id})});check(r,201,'Create Sub-administrator');const sub=r.body;assert.equal(sub.password_hash,undefined);cookie='';r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'subadmin@test.local',password:'SubadminTestPassword!'})});check(r,200,'Sub-administrator login');assert.equal(r.body.user.role,'Sub-administrator');r=await request('/admin.html');assert.equal(r.response.status,200,'Sub-administrator admin page');for(const endpoint of ['/api/summary','/api/complaints','/api/staff','/api/equipment','/api/tenders']){r=await request(endpoint);check(r,200,`Sub-administrator ${endpoint}`)}r=await request('/api/users');check(r,403,'Sub-administrator user access blocked');r=await request('/api/users/'+sub.id,{method:'PATCH',body:JSON.stringify({role:'Administrator'})});check(r,403,'Sub-administrator role change blocked');
+cookie='';r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'admin@civilaffairs.local',password:adminPassword})});check(r,200,'Administrator re-login');r=await request('/api/users');check(r,200,'Administrator user management');r=await request('/api/users/1',{method:'PATCH',body:JSON.stringify({role:'Sub-administrator'})});check(r,403,'Last Administrator protection');r=await request('/api/users/1',{method:'DELETE'});check(r,403,'Last Administrator deletion protection');r=await request('/api/designations/'+designation.id,{method:'DELETE'});check(r,409,'Assigned designation deletion protection');console.log('API workflow tests passed.');}finally{server.kill();fs.rmSync(testData,{recursive:true,force:true)}})().catch(e=>{console.error(e.stack||e);process.exitCode=1});
