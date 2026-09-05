@@ -1,0 +1,38 @@
+name: Build Android SMS Gateway
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android-gateway/**'
+      - '.github/workflows/build-android-gateway.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-gateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: civil-affairs-sms-gateway-debug
+          path: android-gateway/app/build/outputs/apk/debug/app-debug.apk
