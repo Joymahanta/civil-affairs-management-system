@@ -33,59 +33,26 @@ express.response.send = function sendWithoutAuthCaching(body) {
 
 function patchedSession(options = {}) {
   if (options.store) return expressSession(options);
-  return expressSession({
-    ...options,
-    store: new SqliteStore({
-      client: sessionDb,
-      expired: { clear: true, intervalMs: 15 * 60 * 1000 }
-    })
-  });
+  return expressSession({ ...options, store: new SqliteStore({ client: sessionDb, expired: { clear: true, intervalMs: 15 * 60 * 1000 } }) });
 }
 
-sessionDb.exec(`
-  CREATE TABLE IF NOT EXISTS sms_jobs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    recipient TEXT NOT NULL,
-    message TEXT NOT NULL,
-    staff_id INTEGER,
-    created_by INTEGER,
-    status TEXT NOT NULL DEFAULT 'queued',
-    sent_at TEXT,
-    error TEXT,
-    gateway_message_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-`);
+sessionDb.exec(`CREATE TABLE IF NOT EXISTS sms_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, message TEXT NOT NULL, staff_id INTEGER, created_by INTEGER, status TEXT NOT NULL DEFAULT 'queued', sent_at TEXT, error TEXT, gateway_message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`);
 
 function normalizeIndianPhone(value) {
   const raw = String(value || '').trim();
   const digits = raw.replace(/\D/g, '');
-  if (digits.length === 10) return `+91${digits}`;
-  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+  if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith('91') && /^[6-9]\d{9}$/.test(digits.slice(2))) return `+${digits}`;
   if (raw.startsWith('+') && digits.length >= 10) return `+${digits}`;
   return '';
 }
 
 async function textbeeRequest(endpoint, options = {}) {
   const apiKey = String(process.env.TEXTBEE_API_KEY || '').trim();
-  if (!apiKey) {
-    const error = new Error('TextBee is not configured. Add TEXTBEE_API_KEY to the Render service environment.');
-    error.status = 503;
-    throw error;
-  }
-  const response = await fetch(`https://api.textbee.dev/api/v1/gateway${endpoint}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, ...(options.headers || {}) }
-  });
+  if (!apiKey) { const error = new Error('TextBee is not configured. Add TEXTBEE_API_KEY to the Render service environment.'); error.status = 503; throw error; }
+  const response = await fetch(`https://api.textbee.dev/api/v1/gateway${endpoint}`, { ...options, headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = payload?.error || payload?.message || `TextBee returned HTTP ${response.status}.`;
-    const error = new Error(message);
-    error.status = response.status === 429 ? 429 : response.status >= 500 ? 502 : 502;
-    error.details = payload;
-    throw error;
-  }
+  if (!response.ok) { const error = new Error(payload?.error || payload?.message || `TextBee returned HTTP ${response.status}.`); error.status = response.status === 429 ? 429 : 502; error.details = payload; throw error; }
   return payload;
 }
 
@@ -131,8 +98,7 @@ function installSmsRoutes(app) {
       const update = sessionDb.prepare('UPDATE sms_jobs SET status=?, sent_at=?, error=?, gateway_message_id=?, updated_at=? WHERE id=?');
       sessionDb.transaction(() => ids.forEach(id => update.run(finalStatus, accepted > 0 ? stamp : null, finalError, batch, new Date().toISOString(), id)))();
       if (accepted > 0) { const updateStaff = sessionDb.prepare('UPDATE staff SET last_sms_at=? WHERE id=?'); eligible.slice(0, accepted).forEach(person => updateStaff.run(stamp, person.id)); }
-      const log = sessionDb.prepare('INSERT INTO activity (kind, message, created_at) VALUES (?, ?, ?)');
-      log.run('sms', `${accepted} staff SMS update accepted by TextBee, sent by ${req.session.user.name}${invalid.length ? `; ${invalid.length} staff number(s) skipped` : ''}`, stamp);
+      sessionDb.prepare('INSERT INTO activity (kind, message, created_at) VALUES (?, ?, ?)').run('sms', `${accepted} staff SMS update accepted by TextBee, sent by ${req.session.user.name}${invalid.length ? `; ${invalid.length} staff number(s) skipped` : ''}`, stamp);
       res.json({ ok: accepted > 0, sent: accepted, accepted, failed: Math.max(0, eligible.length - accepted) + invalid.length, skipped: invalid.length, batchId: batch });
     } catch (error) {
       if (ids.length) sessionDb.prepare("UPDATE sms_jobs SET status='failed', error=?, updated_at=? WHERE id IN (" + ids.map(() => '?').join(',') + ")").run(String(error.message).slice(0, 500), new Date().toISOString(), ...ids);
@@ -142,7 +108,7 @@ function installSmsRoutes(app) {
 
   app.get('/api/staff/sms/history', (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS history.' });
-    const rows = sessionDb.prepare(`SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id, s.created_at, st.name AS staff_name FROM sms_jobs s LEFT JOIN staff st ON st.id=s.staff_id ORDER BY s.id DESC LIMIT 100`).all();
+    const rows = sessionDb.prepare('SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id, s.created_at, st.name AS staff_name FROM sms_jobs s LEFT JOIN staff st ON st.id=s.staff_id ORDER BY s.id DESC LIMIT 100').all();
     res.json(rows);
   });
 
@@ -161,8 +127,7 @@ function installSmsRoutes(app) {
           const status = String(message.status || '').toLowerCase();
           if (!status) continue;
           const mapped = ['pending','dispatched','sent','delivered','failed','unknown'].includes(status) ? status : 'unknown';
-          const result = updates.run(mapped, mapped === 'failed' ? String(message.error || 'Delivery failed').slice(0,500) : null, new Date().toISOString(), row.gateway_message_id);
-          updated += result.changes;
+          updated += updates.run(mapped, mapped === 'failed' ? String(message.error || 'Delivery failed').slice(0,500) : null, new Date().toISOString(), row.gateway_message_id).changes;
         }
       } catch (error) { console.error('[sms] delivery sync error:', error.message || error); }
     }
@@ -173,10 +138,10 @@ function installSmsRoutes(app) {
 const originalListen = express.application.listen;
 express.application.listen = function patchedListen(...args) { installSmsRoutes(this); return originalListen.apply(this, args); };
 
-installComplaintSmsHooks();
-installComplaintHistoryHooks();
-
+// Core schema must be created by server.js before complaint history can inspect it.
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
+installComplaintSmsHooks();
+installComplaintHistoryHooks();
 
 if (process.env.ADMIN_RESET_PASSWORD) require('./admin-password-reset.js');
