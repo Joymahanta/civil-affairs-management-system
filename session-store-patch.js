@@ -26,7 +26,7 @@ express.response.send = function sendWithoutAuthCaching(body) {
     this.set('Expires', '0');
   }
   if (isAdminHtml && typeof body === 'string' && !body.includes('/complaint-history.js')) {
-    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script></body>');
+    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script><script src="/staff-designation-ui.js" defer></script></body>');
     this.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   }
   return originalSend.call(this, body);
@@ -68,7 +68,6 @@ function installSmsRoutes(app) {
       res.json({ configured: true, connected: Boolean(device?.enabled), device: device ? { id: device._id, name: device.name || `${device.manufacturer || device.brand || ''} ${device.model || ''}`.trim(), enabled: device.enabled, isDefault: device.isDefault } : null, totals: stats?.data ? { sent: stats.data.totalSentSMSCount, received: stats.data.totalReceivedSMSCount, devices: stats.data.totalDeviceCount } : null });
     } catch (error) { res.status(error.status || 502).json({ configured: true, connected: false, error: error.message }); }
   });
-
   app.post('/api/staff/sms', async (req, res, next) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to send SMS updates.' });
     const message = String(req.body?.message || '').trim();
@@ -106,12 +105,10 @@ function installSmsRoutes(app) {
       next(error);
     }
   });
-
   app.get('/api/staff/sms/history', (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS history.' });
     res.json(sessionDb.prepare('SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id, s.created_at, st.name AS staff_name FROM sms_jobs s LEFT JOIN staff st ON st.id=s.staff_id ORDER BY s.id DESC LIMIT 100').all());
   });
-
   app.post('/api/staff/sms/sync', async (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to sync SMS delivery status.' });
     const pending = sessionDb.prepare("SELECT DISTINCT gateway_message_id FROM sms_jobs WHERE gateway_message_id IS NOT NULL AND status IN ('accepted','pending','sending') LIMIT 50").all();
@@ -140,8 +137,6 @@ express.application.listen = function patchedListen(...args) { installSmsRoutes(
 
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
-
-// server.js creates designations and staff tables; repair legacy staff records afterward.
 installStaffDesignationRepair();
 installComplaintSmsHooks();
 installComplaintHistoryHooks();
