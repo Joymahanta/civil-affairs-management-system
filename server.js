@@ -283,37 +283,44 @@ app.get('/api/complaints/:reference', (req, res) => {
   const isAdmin = Boolean(req.session?.user);
   const phone = String(req.query.phone || '').replace(/[^0-9]/g, '');
   const complaint = db.prepare('SELECT * FROM complaints WHERE reference = ?').get(req.params.reference.toUpperCase());
-  if (!complaint) return res.status(404).json({ error: 'No complaint was found with that reference number.' });
-  if (!isAdmin && (!phone || phone !== String(complaint.reporter_phone).replace(/[^0-9]/g, ''))) return res.status(401).json({ error: 'Enter the mobile number used when the complaint was registered.' });
-  if (!isAdmin) return res.json({ reference: complaint.reference, status: complaint.status, assigned_to: complaint.assigned_to, updated_at: complaint.updated_at, category: complaint.category, location: complaint.location });
+  if (!complaint) return res.status(404).json({ error: 'Complaint not found.' });
+  if (!isAdmin && complaint.reporter_phone.replace(/[^0-9]/g, '') !== phone) return res.status(403).json({ error: 'The reference and phone number do not match.' });
   res.json(complaint);
 });
 
-app.post('/api/complaints', (req, res) => {
-  const { type, category, location, reporterName, reporterPhone, reporterEmail = '', description, photoName = '', latitude = null, longitude = null } = req.body;
-  if (![type, category, location, reporterName, reporterPhone, description].every(required)) return res.status(400).json({ error: 'Please complete all required complaint details.' });
-  if (!/^[0-9+\-\s]{8,16}$/.test(reporterPhone.trim())) return res.status(400).json({ error: 'Enter a valid mobile number.' });
-  const urgencyWords = /(no water|live wire|fire|flood|danger|emergency)/i;
-  const priority = urgencyWords.test(description) ? 'Urgent' : 'Medium';
-  const stamp = now(); const ref = reference();
-  const result = db.prepare(`INSERT INTO complaints (reference,type,category,location,reporter_name,reporter_phone,reporter_email,description,photo_name,latitude,longitude,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(ref, type.trim(), category.trim(), location.trim(), reporterName.trim(), reporterPhone.trim(), reporterEmail.trim(), description.trim(), photoName, latitude, longitude, priority, 'New', stamp, stamp);
-  logActivity('complaint', `${ref} received — ${category} at ${location}`);
-  res.status(201).json({ id: result.lastInsertRowid, reference: ref, priority, status: 'New', message: 'Complaint registered. SMS and email notification queued.' });
+app.post('/api/complaints', requireAuth, (req, res) => {
+  const { type, category, location, reporterName, reporterPhone, reporterEmail = '', description, priority = 'Medium' } = req.body;
+  if (![type, category, location, reporterName, reporterPhone, description].every(required)) return res.status(400).json({ error: 'Please complete all required complaint fields.' });
+  if (!['Low', 'Medium', 'High', 'Urgent'].includes(priority)) return res.status(400).json({ error: 'Invalid priority.' });
+  const stamp = now();
+  const ref = reference();
+  db.prepare(`INSERT INTO complaints (reference,type,category,location,reporter_name,reporter_phone,reporter_email,description,priority,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'New',?,?)`).run(ref, type.trim(), category.trim(), location.trim(), reporterName.trim(), reporterPhone.trim(), reporterEmail.trim(), description.trim(), priority, stamp, stamp);
+  logActivity('complaint', `${ref} registered — ${category.trim()}`);
+  res.status(201).json(db.prepare('SELECT * FROM complaints WHERE reference=?').get(ref));
 });
 
 app.patch('/api/complaints/:id', requireAuth, (req, res) => {
-  const current = db.prepare('SELECT * FROM complaints WHERE id = ?').get(req.params.id);
+  const current = db.prepare('SELECT * FROM complaints WHERE id=?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Complaint not found.' });
   const { status = current.status, priority = current.priority, assignedTo = current.assigned_to } = req.body;
-  const allowedStatuses = ['New', 'Assigned', 'In progress', 'Resolved'];
-  const allowedPriorities = ['Low', 'Medium', 'High', 'Urgent'];
-  if (!allowedStatuses.includes(status) || !allowedPriorities.includes(priority)) return res.status(400).json({ error: 'Invalid status or priority.' });
+  if (!['New', 'Assigned', 'In progress', 'Resolved'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+  if (!['Low', 'Medium', 'High', 'Urgent'].includes(priority)) return res.status(400).json({ error: 'Invalid priority.' });
   db.prepare('UPDATE complaints SET status=?, priority=?, assigned_to=?, updated_at=? WHERE id=?').run(status, priority, assignedTo || null, now(), current.id);
-  logActivity('update', `${current.reference} updated to ${status}${assignedTo ? ` — assigned to ${assignedTo}` : ''}`);
-  res.json(db.prepare('SELECT * FROM complaints WHERE id = ?').get(current.id));
+  logActivity('complaint', `${current.reference} updated — ${status}${assignedTo ? ` / assigned to ${assignedTo}` : ''}`);
+  res.json(db.prepare('SELECT * FROM complaints WHERE id=?').get(current.id));
 });
 
 app.get('/api/staff', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM staff ORDER BY name').all()));
+app.post('/api/staff', requireAuth, (req, res) => {
+  const { name, department, phone, attendance = 'Present', currentTask = '' } = req.body;
+  if (![name, department, phone].every(required)) return res.status(400).json({ error: 'Name, department and phone are required.' });
+  if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
+  const result = db.prepare('INSERT INTO staff (name, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?)').run(
+    name.trim(), department.trim(), phone.trim(), attendance, String(currentTask).trim() || null
+  );
+  logActivity('staff', `Staff member added — ${name.trim()}`);
+  res.status(201).json(db.prepare('SELECT * FROM staff WHERE id=?').get(result.lastInsertRowid));
+});
 app.patch('/api/staff/:id', requireAuth, (req, res) => {
   const current = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Staff member not found.' });
@@ -325,58 +332,57 @@ app.patch('/api/staff/:id', requireAuth, (req, res) => {
 });
 app.post('/api/staff/sms', requireAuth, (req, res) => {
   const { message } = req.body;
-  if (!required(message)) return res.status(400).json({ error: 'SMS message cannot be empty.' });
-  const stamp = now(); const result = db.prepare("UPDATE staff SET last_sms_at=? WHERE attendance='Present'").run(stamp);
-  logActivity('sms', `SMS task update sent to ${result.changes} on-duty staff`);
-  res.json({ sent: result.changes, message: 'SMS dispatch recorded for on-duty staff.' });
+  if (!required(message)) return res.status(400).json({ error: 'Message is required.' });
+  const stamp = now();
+  db.prepare("UPDATE staff SET last_sms_at=? WHERE attendance='Present'").run(stamp);
+  logActivity('staff', `SMS task update recorded for on-duty staff — ${message.trim()}`);
+  res.json({ ok: true, message: 'SMS dispatch recorded.', sentAt: stamp });
 });
 
 app.get('/api/equipment', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM equipment ORDER BY asset_code').all()));
 app.patch('/api/equipment/:id', requireAuth, (req, res) => {
   const current = db.prepare('SELECT * FROM equipment WHERE id=?').get(req.params.id);
-  if (!current) return res.status(404).json({ error: 'Equipment item not found.' });
+  if (!current) return res.status(404).json({ error: 'Equipment not found.' });
   const { holder = current.holder, expectedReturn = current.expected_return, condition = current.condition, status = current.status } = req.body;
-  const statuses = ['Available', 'In use', 'Review', 'Repair'];
-  if (!statuses.includes(status)) return res.status(400).json({ error: 'Invalid equipment status.' });
-  const issuedOn = status === 'In use' && !current.issued_on ? new Date().toISOString().slice(0, 10) : current.issued_on;
-  const nextHolder = status === 'Available' ? null : holder;
-  db.prepare('UPDATE equipment SET holder=?, issued_on=?, expected_return=?, condition=?, status=? WHERE id=?').run(nextHolder, issuedOn, expectedReturn || null, condition, status, current.id);
-  logActivity('equipment', `${current.asset_code} marked ${status}${nextHolder ? ` — allocated to ${nextHolder}` : ''}`);
+  if (!['Good', 'Service due', 'Needs repair'].includes(condition)) return res.status(400).json({ error: 'Invalid condition.' });
+  if (!['Available', 'In use', 'Review', 'Repair'].includes(status)) return res.status(400).json({ error: 'Invalid equipment status.' });
+  db.prepare('UPDATE equipment SET holder=?, expected_return=?, condition=?, status=? WHERE id=?').run(holder || null, expectedReturn || null, condition, status, current.id);
+  logActivity('equipment', `${current.asset_code} updated — ${status}`);
   res.json(db.prepare('SELECT * FROM equipment WHERE id=?').get(current.id));
 });
 
-app.get('/api/tenders', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM tenders ORDER BY created_at DESC').all()));
+app.get('/api/tenders', requireAuth, (_, res) => res.json(db.prepare('SELECT * FROM tenders ORDER BY closing_date DESC, id DESC').all()));
 app.post('/api/tenders', requireAuth, (req, res) => {
   const { scope, closingDate } = req.body;
   if (!required(scope) || !required(closingDate)) return res.status(400).json({ error: 'Scope and closing date are required.' });
-  const count = db.prepare('SELECT COUNT(*) AS count FROM tenders').get().count;
-  const no = `STPS/T/${String(new Date().getFullYear()).slice(-2)}/${String(34 + count + 1).padStart(3, '0')}`;
-  const created = now();
-  const result = db.prepare('INSERT INTO tenders (tender_no, scope, closing_date, bids, status, created_at) VALUES (?,?,?,?,?,?)').run(no, scope.trim(), closingDate, 0, 'Draft', created);
-  logActivity('tender', `${no} created — ${scope}`);
-  res.status(201).json(db.prepare('SELECT * FROM tenders WHERE id=?').get(result.lastInsertRowid));
+  const next = db.prepare('SELECT COUNT(*) AS count FROM tenders').get().count + 35;
+  const tenderNo = `STPS/T/${String(new Date().getFullYear()).slice(-2)}/${String(next).padStart(3, '0')}`;
+  db.prepare('INSERT INTO tenders (tender_no, scope, closing_date, bids, status, created_at) VALUES (?, ?, ?, 0, ?, ?)').run(tenderNo, scope.trim(), closingDate, 'Draft', now());
+  logActivity('tender', `${tenderNo} created — ${scope.trim()}`);
+  res.status(201).json(db.prepare('SELECT * FROM tenders WHERE tender_no=?').get(tenderNo));
 });
 app.patch('/api/tenders/:id', requireAuth, (req, res) => {
   const current = db.prepare('SELECT * FROM tenders WHERE id=?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Tender not found.' });
-  const { status = current.status, bids = current.bids } = req.body;
+  const { bids = current.bids, status = current.status } = req.body;
+  if (!Number.isInteger(Number(bids)) || Number(bids) < 0) return res.status(400).json({ error: 'Invalid bid count.' });
   if (!['Draft', 'Open', 'Evaluation', 'Awarded', 'Closed'].includes(status)) return res.status(400).json({ error: 'Invalid tender status.' });
-  db.prepare('UPDATE tenders SET status=?, bids=? WHERE id=?').run(status, Number(bids) || 0, current.id);
-  logActivity('tender', `${current.tender_no} moved to ${status}`);
+  db.prepare('UPDATE tenders SET bids=?, status=? WHERE id=?').run(Number(bids), status, current.id);
+  logActivity('tender', `${current.tender_no} updated — ${status}`);
   res.json(db.prepare('SELECT * FROM tenders WHERE id=?').get(current.id));
 });
 
 app.get('/api/insights', requireAuth, (_, res) => {
-  const patterns = db.prepare("SELECT category, COUNT(*) AS count FROM complaints WHERE status != 'Resolved' GROUP BY category ORDER BY count DESC LIMIT 4").all();
-  const trend = patterns.map((row, i) => ({ ...row, change: [43, 18, -12, 8][i] || 5 }));
-  const focus = db.prepare("SELECT location, category, COUNT(*) AS count FROM complaints WHERE status != 'Resolved' GROUP BY location, category ORDER BY count DESC LIMIT 1").get();
-  res.json({ trend, focus, generatedAt: now(), guardrails: ['Resident contact details are visible only to authorized staff.', 'AI suggests categories and priorities; staff approve every action.', 'Every operational update is retained in the audit log.'] });
+  const byCategory = db.prepare("SELECT category, COUNT(*) AS count FROM complaints WHERE status != 'Resolved' GROUP BY category ORDER BY count DESC").all();
+  const urgent = db.prepare("SELECT COUNT(*) AS count FROM complaints WHERE priority IN ('Urgent','High') AND status != 'Resolved'").get().count;
+  const absent = db.prepare("SELECT COUNT(*) AS count FROM staff WHERE attendance='Absent'").get().count;
+  const repair = db.prepare("SELECT COUNT(*) AS count FROM equipment WHERE status='Repair' OR condition='Needs repair'").get().count;
+  res.json({ focus: urgent ? `${urgent} high-priority complaint${urgent === 1 ? '' : 's'} need attention.` : 'No urgent complaints are currently open.', patterns: byCategory, guardrails: [`${absent} staff member${absent === 1 ? '' : 's'} marked absent`, `${repair} equipment item${repair === 1 ? '' : 's'} marked for repair`, 'AI suggestions remain review-only and do not auto-change records.'] });
 });
 
-app.get('/admin.html', (req, res, next) => {
-  if (!req.session?.user) return res.redirect('/login.html');
-  next();
-}, (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/login', (_, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/admin', requireAuth, (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.listen(PORT, () => console.log(`Civil Affairs is running at http://localhost:${PORT}`));
+
+app.listen(PORT, () => console.log(`Civil Affairs server running on port ${PORT}`));
