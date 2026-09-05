@@ -4,8 +4,8 @@
   "description": "Township civil administration and resident service portal",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
+    "start": "node session-start.js",
+    "dev": "node --watch session-start.js",
     "test": "node tests/api-test.js"
   },
   "dependencies": {
