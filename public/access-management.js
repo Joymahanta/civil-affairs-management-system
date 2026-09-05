@@ -10,7 +10,87 @@
   function renderDesignations(){ $('#designations-body').innerHTML=designations.map(d=>`<tr><td><b>${esc(d.name)}</b></td><td>${esc(d.description||'—')}</td><td>${d.staff_count}</td><td><button class="button secondary small" data-ed="${d.id}">Edit</button> <button class="button secondary small" data-dd="${d.id}">Delete</button></td></tr>`).join('');document.querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>{const d=designations.find(x=>x.id==b.dataset.ed),f=$('#designation-form');f.reset();f.id.value=d.id;f.name.value=d.name;f.description.value=d.description||'';$('#designation-title').textContent='Update designation';modal('designation-form-modal',true)});document.querySelectorAll('[data-dd]').forEach(b=>b.onclick=async()=>{try{await api(`/api/designations/${b.dataset.dd}`,{method:'DELETE'});await loadDesignations();renderDesignations();toast('Designation deleted.')}catch(e){toast(e.message)}})}
   async function loadUsers(){users=await api('/api/users');$('#users-body').innerHTML=users.map(u=>`<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${esc(u.status)}</td><td>${new Date(u.created_at).toLocaleDateString()}</td><td><button class="button secondary small" data-eu="${u.id}">Edit</button> <button class="button secondary small" data-du="${u.id}">Delete</button></td></tr>`).join('');document.querySelectorAll('[data-eu]').forEach(b=>b.onclick=()=>openUser(b.dataset.eu));document.querySelectorAll('[data-du]').forEach(b=>b.onclick=async()=>{try{await api(`/api/users/${b.dataset.du}`,{method:'DELETE'});await loadUsers();toast('User deleted.')}catch(e){toast(e.message)}})}
   function openUser(id){const u=users.find(x=>x.id==id),f=$('#user-form');f.reset();$('#user-staff').innerHTML='<option value="">No linked staff member</option>'+staff.map(s=>`<option value="${s.id}">${esc(s.name)} — ${esc(s.designation||s.department)}</option>`).join('');f.id.value=u?.id||'';f.name.value=u?.name||'';f.email.value=u?.email||'';f.role.value=u?.role||'Sub-administrator';f.status.value=u?.status||'Active';f.staffId.value=u?.staff_id||'';f.password.required=!u;$('#user-title').textContent=u?'Update user':'Create user';modal('user-modal',true)}
+
+  function initGlobalSearch() {
+    const input = $('#admin-search');
+    if (!input || input.dataset.globalSearchReady) return;
+    input.dataset.globalSearchReady = 'true';
+
+    const wrapper = input.parentElement;
+    if (!wrapper) return;
+    wrapper.style.position = 'relative';
+
+    const results = document.createElement('div');
+    results.id = 'global-search-results';
+    results.style.cssText = 'display:none;position:absolute;top:calc(100% + 8px);left:0;right:0;z-index:1000;background:#fff;border:1px solid #d9e3df;border-radius:12px;box-shadow:0 14px 30px rgba(0,0,0,.12);max-height:420px;overflow:auto;padding:6px;';
+    wrapper.appendChild(results);
+
+    let timer;
+    let requestId = 0;
+    const sources = [
+      { label:'Employee', page:'workforce', key:'name', fields:['name','designation','department','phone'], get:()=>api('/api/staff') },
+      { label:'Case', page:'complaints', key:'reference', fields:['reference','location','category','reporter_name','status'], get:()=>api('/api/complaints') },
+      { label:'Equipment', page:'equipment', key:'asset_code', fields:['asset_code','name','holder','condition','status'], get:()=>api('/api/equipment') },
+      { label:'Tender', page:'tenders', key:'tender_no', fields:['tender_no','scope','status'], get:()=>api('/api/tenders') }
+    ];
+
+    const hide = () => { results.style.display='none'; results.innerHTML=''; };
+    const navigate = page => {
+      hide();
+      const button = document.querySelector(`[data-admin-page="${page}"]`);
+      if (button) button.click();
+    };
+
+    const render = (items, query) => {
+      if (!items.length) {
+        results.innerHTML = `<div style="padding:14px;color:#687b76;font-size:14px">No matches for “${esc(query)}”.</div>`;
+        results.style.display='block';
+        return;
+      }
+      results.innerHTML = items.slice(0,20).map((item,index) => `<button type="button" data-search-index="${index}" style="display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:9px;padding:10px 12px;cursor:pointer"><span style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#148468;margin-bottom:3px">${esc(item.label)}</span><b style="display:block;color:#102d27;font-size:14px">${esc(item.title)}</b><span style="display:block;color:#687b76;font-size:13px;margin-top:2px">${esc(item.detail)}</span></button>`).join('');
+      results.style.display='block';
+      results.querySelectorAll('[data-search-index]').forEach(button => button.addEventListener('mouseenter',()=>button.style.background='#f3f7f5'));
+      results.querySelectorAll('[data-search-index]').forEach(button => button.addEventListener('mouseleave',()=>button.style.background='transparent'));
+      results.querySelectorAll('[data-search-index]').forEach(button => button.addEventListener('click',()=>navigate(items[Number(button.dataset.searchIndex)].page)));
+    };
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const query = input.value.trim();
+      if (!query) { hide(); return; }
+      timer = setTimeout(async () => {
+        const currentRequest = ++requestId;
+        try {
+          const records = await Promise.all(sources.map(async source => ({source, rows: await source.get()})));
+          if (currentRequest !== requestId) return;
+          const q = query.toLowerCase();
+          const matches = [];
+          records.forEach(({source, rows}) => {
+            rows.forEach(row => {
+              if (!source.fields.some(field => String(row[field] ?? '').toLowerCase().includes(q))) return;
+              let title = row[source.key] || row.name || row.reference || row.asset_code || row.tender_no;
+              let detail = '';
+              if (source.label === 'Employee') detail = `${row.designation || 'Unassigned'} · ${row.department || ''} · ${row.phone || ''}`;
+              if (source.label === 'Case') detail = `${row.reference} · ${row.category || ''} · ${row.location || ''} · ${row.status || ''}`;
+              if (source.label === 'Equipment') detail = `${row.asset_code} · ${row.holder || 'Store'} · ${row.status || ''}`;
+              if (source.label === 'Tender') detail = `${row.tender_no} · ${row.scope || ''} · ${row.status || ''}`;
+              matches.push({label:source.label,page:source.page,title,detail});
+            });
+          });
+          render(matches, query);
+        } catch (e) {
+          results.innerHTML = `<div style="padding:14px;color:#b42318;font-size:14px">Search could not be completed.</div>`;
+          results.style.display='block';
+        }
+      }, 220);
+    });
+
+    input.addEventListener('keydown', event => { if (event.key === 'Escape') { input.value=''; hide(); input.blur(); } });
+    document.addEventListener('click', event => { if (!wrapper.contains(event.target)) hide(); });
+  }
+
   async function boot(){const session=await api('/api/auth/session');if(!session.authenticated)return;document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>modal(b.dataset.close,false));await Promise.all([loadDesignations(),loadStaff()]);
+    initGlobalSearch();
     $('#open-add-staff').addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();const f=$('#add-staff-form');f.reset();$('#staff-login-fields').classList.add('hidden');modal('add-staff-modal',true)},true);
     $('#staff-login-toggle').onchange=e=>$('#staff-login-fields').classList.toggle('hidden',!e.target.checked);
     $('#add-staff-form').addEventListener('submit',async e=>{e.preventDefault();e.stopImmediatePropagation();const f=e.currentTarget;err(f);try{const data=Object.fromEntries(new FormData(f));data.createLogin=$('#staff-login-toggle').checked;await api('/api/staff',{method:'POST',body:JSON.stringify(data)});modal('add-staff-modal',false);toast('Staff member created.');setTimeout(()=>location.reload(),300)}catch(x){err(f,x.message)}},true);
