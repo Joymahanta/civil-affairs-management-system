@@ -132,13 +132,16 @@ function installSmsRoutes(app) {
   });
 }
 
+// Complaint SMS must be installed BEFORE server.js registers its complaint routes.
+// The hook wraps route registration; installing it afterward cannot affect routes already registered.
+installComplaintSmsHooks();
+
 const originalListen = express.application.listen;
 express.application.listen = function patchedListen(...args) { installSmsRoutes(this); return originalListen.apply(this, args); };
 
 require.cache[require.resolve('express-session')].exports = patchedSession;
 require('./server.js');
 installStaffDesignationRepair();
-installComplaintSmsHooks();
 installComplaintHistoryHooks();
 
 if (process.env.ADMIN_RESET_PASSWORD) require('./admin-password-reset.js');
