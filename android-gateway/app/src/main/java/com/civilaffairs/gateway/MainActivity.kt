@@ -16,7 +16,6 @@ import android.widget.TextView
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -115,10 +114,7 @@ class MainActivity : Activity() {
         try {
             val response = request("GET", "$server/api/sms/gateway/jobs?limit=5", token, null)
             val jobs = JSONObject(response).optJSONArray("jobs") ?: return
-            for (i in 0 until jobs.length()) {
-                val job = jobs.getJSONObject(i)
-                sendJob(server, token, job)
-            }
+            for (i in 0 until jobs.length()) sendJob(server, token, jobs.getJSONObject(i))
         } catch (e: Exception) {
             updateStatus("Gateway connection error: ${e.message ?: "unknown error"}")
         }
@@ -134,7 +130,13 @@ class MainActivity : Activity() {
             if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
                 throw SecurityException("SMS permission has not been granted")
             }
-            SmsManager.getDefault().sendTextMessage(recipient, null, message, null, null)
+            val manager = SmsManager.getDefault()
+            val parts = manager.divideMessage(message)
+            if (parts.size == 1) {
+                manager.sendTextMessage(recipient, null, message, null, null)
+            } else {
+                manager.sendMultipartTextMessage(recipient, null, parts, null, null)
+            }
             success = true
             updateStatus("SMS sent to $recipient")
         } catch (e: Exception) {
@@ -150,7 +152,7 @@ class MainActivity : Activity() {
         try {
             request("POST", "$server/api/sms/gateway/result", token, payload.toString())
         } catch (e: Exception) {
-            updateStatus("SMS sent, but result could not be recorded")
+            updateStatus("SMS result could not be recorded")
         }
     }
 
