@@ -92,7 +92,7 @@ function initAdminConsole() {
   const titles = { overview: 'Overview', complaints: 'Complaints', workforce: 'Workforce', equipment: 'Equipment', tenders: 'Tenders', insights: 'AI insights', settings: 'Settings' };
   $$('[data-admin-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.adminPage)));
   $$('[data-open-admin-complaint]').forEach(button => button.addEventListener('click', () => openModal('admin-complaint-modal')));
-  $('#open-sms').addEventListener('click', () => openModal('sms-modal'));
+  $('#open-sms').addEventListener('click', async () => { openModal('sms-modal'); try { const status = await api('/api/staff/sms/status'); const node = $('#sms-status'); if (node) node.textContent = status.connected ? `TextBee connected · ${status.device?.name || 'Android gateway'} ready` : status.configured ? 'TextBee is configured but no enabled Android device is available.' : 'TextBee API key is not configured.'; } catch (error) { const node = $('#sms-status'); if (node) node.textContent = error.message; } });
   $('#open-equipment').addEventListener('click', () => { const form = $('#equipment-form'); form.reset(); $('[name="id"]', form).value = ''; $('#equipment-name').textContent = 'Select an item in the register to edit an existing allocation.'; openModal('equipment-modal'); toast('Choose an equipment row to update an existing item.'); });
   $('#open-tender').addEventListener('click', () => openModal('tender-modal'));
   $('#refresh-insights').addEventListener('click', async () => { await loadInsights(); toast('AI daily brief refreshed from current complaint records.'); });
@@ -200,7 +200,6 @@ function initAdminConsole() {
     if (type === 'quarter maintenance') return ['Waterworks', 'Electrical', 'Inspection'];
     return [];
   }
-
   function renderAssignmentOptions(form, item) {
     let control = $('[name="assignedTo"]', form);
     if (!control) return;
@@ -233,7 +232,25 @@ function initAdminConsole() {
   async function saveComplaint(event) { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/complaints/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) }); closeModal('complaint-edit-modal'); toast('Complaint updated.'); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); } catch (error) { setError(form, error.message); } }
   function editStaff(id) { const item = state.staff.find(x => x.id === id); if (!item) return; const form = $('#staff-form'); $('[name="id"]', form).value = item.id; $('[name="attendance"]', form).value = item.attendance; $('[name="currentTask"]', form).value = item.current_task || ''; $('#staff-name').textContent = `${item.name} · ${item.department}`; setError(form); openModal('staff-modal'); }
   async function saveStaff(event) { event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/staff/${values.id}`, { method: 'PATCH', body: JSON.stringify(values) }); closeModal('staff-modal'); toast('Staff record updated.'); await Promise.all([loadStaff(), loadSummary()]); } catch (error) { setError(form, error.message); } }
-  async function sendSms(event) { event.preventDefault(); const form = event.currentTarget; setError(form); try { const data = await api('/api/staff/sms', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); closeModal('sms-modal'); form.reset(); toast(`${data.sent} on-duty staff recorded for SMS dispatch.`); await Promise.all([loadStaff(), loadSummary()]); } catch (error) { setError(form, error.message); } }
+  async function sendSms(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    setError(form);
+    const button = $('button[type="submit"]', form) || $('button:not([type])', form);
+    if (button) { button.disabled = true; button.textContent = 'Sending…'; }
+    try {
+      const data = await api('/api/staff/sms', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+      closeModal('sms-modal');
+      form.reset();
+      if (data.failed) toast(`TextBee accepted ${data.accepted || data.sent || 0} SMS; ${data.failed} failed or skipped.`);
+      else toast(`TextBee accepted ${data.accepted || data.sent || 0} SMS for delivery.`);
+      await loadStaff();
+    } catch (error) {
+      setError(form, error.message);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = 'Send SMS update'; }
+    }
+  }
   function editEquipment(id) { const item = state.equipment.find(x => x.id === id); if (!item) return; const form = $('#equipment-form'); $('[name="id"]', form).value = item.id; $('[name="holder"]', form).value = item.holder || ''; $('[name="expectedReturn"]', form).value = item.expected_return || ''; $('[name="condition"]', form).value = item.condition; $('[name="status"]', form).value = item.status; $('#equipment-name').textContent = `${item.asset_code} · ${item.name}`; setError(form); openModal('equipment-modal'); }
   async function saveEquipment(event) { event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form)); if (!values.id) { setError(form, 'Choose an equipment row in the register before saving.'); return; } setError(form); try { await api(`/api/equipment/${values.id}`, { method: 'PATCH', body: JSON.stringify(values) }); closeModal('equipment-modal'); toast('Equipment record updated.'); await Promise.all([loadEquipment(), loadSummary()]); } catch (error) { setError(form, error.message); } }
   async function createTender(event) { event.preventDefault(); const form = event.currentTarget; setError(form); try { const data = await api('/api/tenders', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); closeModal('tender-modal'); form.reset(); toast(`${data.tender_no} created as a draft.`); await Promise.all([loadTenders(), loadSummary()]); } catch (error) { setError(form, error.message); } }
