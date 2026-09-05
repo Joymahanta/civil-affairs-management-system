@@ -11,21 +11,26 @@
       control.replaceWith(select);
       control = select;
     }
+    if (control.dataset.departmentReady === '1') return control;
     const current = control.value || '';
     control.innerHTML = '<option value="">Select department</option>' + DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
     if (current) control.value = current;
+    control.dataset.departmentReady = '1';
     return control;
   }
 
   async function loadDesignations(select, selected) {
-    if (!select) return;
+    if (!select || select.dataset.designationsLoading === '1') return;
+    select.dataset.designationsLoading = '1';
     try {
       const response = await fetch('/api/designations', { cache: 'no-store' });
       const rows = await response.json();
       if (!response.ok) throw new Error(rows.error || 'Could not load designations');
       select.innerHTML = '<option value="">Select designation</option>' + rows.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
       if (selected != null && selected !== '') select.value = String(selected);
+      select.dataset.designationsReady = '1';
     } catch (error) { console.error('[workforce-form]', error); }
+    finally { select.dataset.designationsLoading = '0'; }
   }
 
   function ensureEditField(form, name, label, html) {
@@ -44,7 +49,7 @@
     if (!form) return;
     makeDepartmentSelect(form.querySelector('[name="department"]'));
     const designation = form.querySelector('[name="designationId"]');
-    if (designation && !designation.options.length) loadDesignations(designation);
+    if (designation && !designation.options.length && !designation.dataset.designationsLoading) loadDesignations(designation);
   }
 
   function repairEditForm() {
@@ -55,7 +60,7 @@
     ensureEditField(form, 'phone', 'Phone', '<input name="phone" inputmode="numeric" required>');
     makeDepartmentSelect(form.querySelector('[name="department"]'));
     const designation = form.querySelector('[name="designationId"]');
-    if (designation && !designation.options.length) loadDesignations(designation);
+    if (designation && !designation.options.length && !designation.dataset.designationsLoading) loadDesignations(designation);
   }
 
   async function populateEdit(id) {
@@ -66,8 +71,7 @@
       if (!item) return;
       repairEditForm();
       const form = document.getElementById('staff-form');
-      const department = makeDepartmentSelect(form.querySelector('[name="department"]'));
-      department.value = item.department || '';
+      makeDepartmentSelect(form.querySelector('[name="department"]')).value = item.department || '';
       form.querySelector('[name="phone"]').value = item.phone || '';
       await loadDesignations(form.querySelector('[name="designationId"]'), item.designation_id);
       const title = document.getElementById('staff-name');
@@ -77,8 +81,6 @@
 
   function repair() { repairAddForm(); repairEditForm(); }
 
-  // Capture the Update click before app.js opens the modal. The actual record is
-  // fetched afterward so the three editable fields are populated with current data.
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-edit-staff]');
     if (button) setTimeout(() => populateEdit(button.dataset.editStaff), 0);
