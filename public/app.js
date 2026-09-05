@@ -90,7 +90,6 @@ function updateAdminIdentity(user) {
 function initAdminConsole() {
   const state = { summary: null, complaints: [], staff: [], equipment: [], tenders: [], insights: null };
   const titles = { overview: 'Overview', complaints: 'Complaints', workforce: 'Workforce', equipment: 'Equipment', tenders: 'Tenders', insights: 'AI insights', settings: 'Settings' };
-
   $$('[data-admin-page]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.adminPage)));
   $$('[data-open-admin-complaint]').forEach(button => button.addEventListener('click', () => openModal('admin-complaint-modal')));
   $('#open-sms').addEventListener('click', () => openModal('sms-modal'));
@@ -102,15 +101,7 @@ function initAdminConsole() {
   $('#complaint-status').addEventListener('change', loadComplaints);
   $('#complaint-type').addEventListener('change', loadComplaints);
   $('#export-complaints').addEventListener('click', exportComplaints);
-  $('#admin-search').addEventListener('input', debounce(async event => {
-    const query = event.target.value.trim();
-    if (!query) return;
-    showPage('complaints');
-    await loadComplaints(query);
-  }, 300));
-
-  $$('[data-summary-page]').forEach(card => card.addEventListener('click', () => showPage(card.dataset.summaryPage)));
-
+  $('#admin-search').addEventListener('input', debounce(async event => { const query = event.target.value.trim(); if (!query) return; showPage('complaints'); await loadComplaints(query); }, 300));
   $('#admin-complaint-form').addEventListener('submit', event => createComplaint(event, 'admin-complaint-modal'));
   $('#complaint-edit-form').addEventListener('submit', saveComplaint);
   $('#staff-form').addEventListener('submit', saveStaff);
@@ -118,7 +109,6 @@ function initAdminConsole() {
   $('#equipment-form').addEventListener('submit', saveEquipment);
   $('#tender-form').addEventListener('submit', createTender);
   $('#tender-edit-form').addEventListener('submit', saveTender);
-
   Promise.all([loadSummary(), loadComplaints(), loadStaff(), loadEquipment(), loadTenders(), loadInsights()]).catch(error => toast(error.message));
 
   function showPage(id) {
@@ -134,15 +124,32 @@ function initAdminConsole() {
   }
   async function loadSummary() {
     state.summary = await api('/api/summary'); const s = state.summary;
+    const [complaints, staff, equipment] = await Promise.all([api('/api/complaints'), api('/api/staff'), api('/api/equipment')]);
+    state.complaints = complaints; state.staff = staff; state.equipment = equipment;
+    const today = new Date().toISOString().slice(0, 10);
+    const totalComplaints = complaints.length;
+    const resolvedComplaints = complaints.filter(item => item.status === 'Resolved').length;
+    const completion = totalComplaints ? Math.round((resolvedComplaints / totalComplaints) * 100) : 0;
+    const openComplaints = complaints.filter(item => item.status !== 'Resolved').length;
+    const receivedToday = complaints.filter(item => String(item.created_at).slice(0, 10) === today).length;
+    const presentStaff = staff.filter(item => item.attendance === 'Present').length;
+    const inUseEquipment = equipment.filter(item => item.status === 'In use').length;
+    const serviceHealth = [...new Set(complaints.map(item => item.category).filter(Boolean))].slice(0, 4).map(category => { const rows = complaints.filter(item => item.category === category); const resolved = rows.filter(item => item.status === 'Resolved').length; return { category, value: rows.length ? Math.round((resolved / rows.length) * 100) : 0 }; });
+    const recent = complaints.filter(item => Date.now() - new Date(item.created_at).getTime() < 7 * 24 * 60 * 60 * 1000).length;
+    const previous = complaints.filter(item => { const age = Date.now() - new Date(item.created_at).getTime(); return age >= 7 * 24 * 60 * 60 * 1000 && age < 14 * 24 * 60 * 60 * 1000; }).length;
+    const change = previous ? Math.round(((recent - previous) / previous) * 100) : 0;
     $('#summary-cards').innerHTML = [
-      ['Open complaints', s.open, `${s.receivedToday} received today`, ''], ['Work completion', `${s.completion}%`, '6% from last week', ''],
-      ['Staff on duty', `${s.staffOnDuty} / ${s.staffTotal}`, `${s.staffTotal - s.staffOnDuty} pending attendance`, 'warning'], ['Equipment in use', `${s.equipmentInUse} / ${s.equipmentTotal}`, 'Current operational allocation', '']
-    ].map(x => `<div class="summary" data-summary-page="${x[0] === 'Open complaints' || x[0] === 'Work completion' ? 'complaints' : x[0] === 'Staff on duty' ? 'workforce' : 'equipment'}" role="button" tabindex="0"><label>${x[0]}</label><strong>${x[1]}</strong><span class="note ${x[3]}">${x[2]}</span></div>`).join('');
+      ['Open complaints', openComplaints, `${receivedToday} received today`, '', 'complaints'],
+      ['Work completion', `${completion}%`, `${resolvedComplaints} of ${totalComplaints} complaints resolved`, '', 'complaints'],
+      ['Staff on duty', `${presentStaff} / ${staff.length}`, `${staff.length - presentStaff} pending attendance`, 'warning', 'workforce'],
+      ['Equipment in use', `${inUseEquipment} / ${equipment.length}`, 'Current operational allocation', '', 'equipment']
+    ].map(x => `<button type="button" class="summary summary-link" data-summary-page="${x[4]}" aria-label="Open ${escapeHtml(x[0])}"><label>${x[0]}</label><strong>${x[1]}</strong><span class="note ${x[3]}">${x[2]}</span></button>`).join('');
     $$('[data-summary-page]').forEach(card => card.addEventListener('click', () => showPage(card.dataset.summaryPage)));
     $('#priority-body').innerHTML = s.priority.map(item => `<tr><td class="case">${escapeHtml(item.reference)}</td><td>${escapeHtml(item.location)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.assigned_to || '—')}</td><td>${badge(item.status === 'New' && item.priority === 'Urgent' ? 'Urgent' : item.status)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No active complaints.</td></tr>';
     $('#activity-list').innerHTML = s.activity.map(item => `<div class="activity"><span class="activity-dot">${activityIcon(item.kind)}</span><p>${escapeHtml(item.message)}<br><time>${formatDate(item.created_at)}</time></p></div>`).join('') || '<p class="empty">No operational activity yet.</p>';
-    const health = [['Water supply', 91, ''], ['Electrical works', 78, 'var(--blue)'], ['Sanitation', 84, 'var(--amber)'], ['Public works', 69, 'var(--red)']];
-    $('#service-health').innerHTML = health.map(row => `<div class="bar-row"><div class="bar-info"><span>${row[0]}</span><b>${row[1]}%</b></div><div class="bar-track"><div class="bar-fill" style="width:${row[1]}%;${row[2] ? `background:${row[2]}` : ''}"></div></div></div>`).join('');
+    $('#service-health').innerHTML = serviceHealth.map((row, index) => { const fill = Math.max(8, row.value); const css = index === 1 ? 'var(--blue)' : index === 2 ? 'var(--amber)' : index === 3 ? 'var(--red)' : ''; return `<div class="bar-row"><div class="bar-info"><span>${escapeHtml(row.category)}</span><b>${row.value}%</b></div><div class="bar-track"><div class="bar-fill" style="width:${fill}%;${css ? `background:${css}` : ''}"></div></div></div>`; }).join('') || '<p class="empty">No complaint service data yet.</p>';
+    const trendNote = $('#work-completion-note');
+    if (trendNote) trendNote.textContent = previous ? `${change > 0 ? '+' : ''}${change}% complaint volume vs previous 7 days` : 'No previous 7-day baseline yet';
   }
   async function loadComplaints(search = '') {
     const params = new URLSearchParams(); const status = $('#complaint-status').value; const type = $('#complaint-type').value;
@@ -175,10 +182,9 @@ function initAdminConsole() {
     $('#guardrail-list').innerHTML = info.guardrails.map((item, index) => `<div class="insight"><b>${['Least necessary access', 'Human approval', 'Auditability'][index]}</b><p>${escapeHtml(item)}</p></div>`).join('');
   }
   async function createComplaint(event, modalId) {
-    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form) || $('button:not([type])', form);
-if (button) button.disabled = true;
+    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form) || $('button:not([type])', form); if (button) button.disabled = true;
     try { const payload = Object.fromEntries(new FormData(form)); const data = await api('/api/complaints', { method: 'POST', body: JSON.stringify(payload) }); closeModal(modalId); form.reset(); toast(`${data.reference} created successfully.`); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); }
-    catch (error) { setError(form, error.message); }finally { if (button) button.disabled = false; }
+    catch (error) { setError(form, error.message); } finally { if (button) button.disabled = false; }
   }
   function editComplaint(id) { const item = state.complaints.find(x => x.id === id); if (!item) return; const form = $('#complaint-edit-form'); $('[name="id"]', form).value = item.id; $('[name="status"]', form).value = item.status; $('[name="priority"]', form).value = item.priority; $('[name="assignedTo"]', form).value = item.assigned_to || ''; $('#edit-reference').textContent = `${item.reference} · ${item.location}`; setError(form); openModal('complaint-edit-modal'); }
   async function saveComplaint(event) { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/complaints/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) }); closeModal('complaint-edit-modal'); toast('Complaint updated.'); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); } catch (error) { setError(form, error.message); } }
