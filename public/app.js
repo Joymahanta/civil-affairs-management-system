@@ -38,7 +38,7 @@ function initResident() {
   photo?.addEventListener('change', () => { photoBox.textContent = photo.files[0] ? `✓ ${photo.files[0].name} selected` : '⌁ Choose a photo · report time and available location will be attached'; });
   if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
     pos => { locationData = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }; },
-    () => {}, { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 }
+    () => { }, { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 }
   );
   reportForm.addEventListener('submit', async event => {
     event.preventDefault(); setError(reportForm);
@@ -161,9 +161,10 @@ function initAdminConsole() {
     $('#guardrail-list').innerHTML = info.guardrails.map((item, index) => `<div class="insight"><b>${['Least necessary access', 'Human approval', 'Auditability'][index]}</b><p>${escapeHtml(item)}</p></div>`).join('');
   }
   async function createComplaint(event, modalId) {
-    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form); button.disabled = true;
+    event.preventDefault(); const form = event.currentTarget; setError(form); const button = $('button[type="submit"]', form) || $('button:not([type])', form);
+if (button) button.disabled = true;
     try { const payload = Object.fromEntries(new FormData(form)); const data = await api('/api/complaints', { method: 'POST', body: JSON.stringify(payload) }); closeModal(modalId); form.reset(); toast(`${data.reference} created successfully.`); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); }
-    catch (error) { setError(form, error.message); } finally { button.disabled = false; }
+    catch (error) { setError(form, error.message); }finally { if (button) button.disabled = false; }
   }
   function editComplaint(id) { const item = state.complaints.find(x => x.id === id); if (!item) return; const form = $('#complaint-edit-form'); $('[name="id"]', form).value = item.id; $('[name="status"]', form).value = item.status; $('[name="priority"]', form).value = item.priority; $('[name="assignedTo"]', form).value = item.assigned_to || ''; $('#edit-reference').textContent = `${item.reference} · ${item.location}`; setError(form); openModal('complaint-edit-modal'); }
   async function saveComplaint(event) { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); setError(form); try { await api(`/api/complaints/${data.id}`, { method: 'PATCH', body: JSON.stringify(data) }); closeModal('complaint-edit-modal'); toast('Complaint updated.'); await Promise.all([loadSummary(), loadComplaints(), loadInsights()]); } catch (error) { setError(form, error.message); } }
@@ -179,7 +180,7 @@ function initAdminConsole() {
   async function changePassword(event) { event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form)); setError(form); try { const data = await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify(values) }); form.reset(); toast(data.message); } catch (error) { setError(form, error.message); } }
 }
 function initLogin() {
-  api('/api/auth/session').then(session => { if (session.authenticated) window.location.replace('/admin.html'); }).catch(() => {});
+  api('/api/auth/session').then(session => { if (session.authenticated) window.location.replace('/admin.html'); }).catch(() => { });
   const form = $('#login-form');
   form.addEventListener('submit', async event => { event.preventDefault(); setError(form); const button = $('button[type="submit"]', form); button.disabled = true; button.textContent = 'Signing in…'; try { await api('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); window.location.replace('/admin.html'); } catch (error) { setError(form, error.message); } finally { button.disabled = false; button.textContent = 'Sign in securely'; } });
 }
