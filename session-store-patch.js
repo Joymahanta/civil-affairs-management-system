@@ -26,7 +26,7 @@ express.response.send = function sendWithoutAuthCaching(body) {
     this.set('Expires', '0');
   }
   if (isAdminHtml && typeof body === 'string' && !body.includes('/complaint-history.js')) {
-    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script><script src="/staff-designation-ui.js" defer></script></body>');
+    body = body.replace('</body>', '<script src="/complaint-history.js" defer></script><script src="/staff-designation-ui.js" defer></script><script src="/workforce-form-patch.js"></script></body>');
     this.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   }
   return originalSend.call(this, body);
