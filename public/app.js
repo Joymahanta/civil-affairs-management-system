@@ -109,6 +109,8 @@ function initAdminConsole() {
     await loadComplaints(query);
   }, 300));
 
+  $$('[data-summary-page]').forEach(card => card.addEventListener('click', () => showPage(card.dataset.summaryPage)));
+
   $('#admin-complaint-form').addEventListener('submit', event => createComplaint(event, 'admin-complaint-modal'));
   $('#complaint-edit-form').addEventListener('submit', saveComplaint);
   $('#staff-form').addEventListener('submit', saveStaff);
@@ -135,7 +137,8 @@ function initAdminConsole() {
     $('#summary-cards').innerHTML = [
       ['Open complaints', s.open, `${s.receivedToday} received today`, ''], ['Work completion', `${s.completion}%`, '6% from last week', ''],
       ['Staff on duty', `${s.staffOnDuty} / ${s.staffTotal}`, `${s.staffTotal - s.staffOnDuty} pending attendance`, 'warning'], ['Equipment in use', `${s.equipmentInUse} / ${s.equipmentTotal}`, 'Current operational allocation', '']
-    ].map(x => `<div class="summary"><label>${x[0]}</label><strong>${x[1]}</strong><span class="note ${x[3]}">${x[2]}</span></div>`).join('');
+    ].map(x => `<div class="summary" data-summary-page="${x[0] === 'Open complaints' || x[0] === 'Work completion' ? 'complaints' : x[0] === 'Staff on duty' ? 'workforce' : 'equipment'}" role="button" tabindex="0"><label>${x[0]}</label><strong>${x[1]}</strong><span class="note ${x[3]}">${x[2]}</span></div>`).join('');
+    $$('[data-summary-page]').forEach(card => card.addEventListener('click', () => showPage(card.dataset.summaryPage)));
     $('#priority-body').innerHTML = s.priority.map(item => `<tr><td class="case">${escapeHtml(item.reference)}</td><td>${escapeHtml(item.location)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.assigned_to || '—')}</td><td>${badge(item.status === 'New' && item.priority === 'Urgent' ? 'Urgent' : item.status)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No active complaints.</td></tr>';
     $('#activity-list').innerHTML = s.activity.map(item => `<div class="activity"><span class="activity-dot">${activityIcon(item.kind)}</span><p>${escapeHtml(item.message)}<br><time>${formatDate(item.created_at)}</time></p></div>`).join('') || '<p class="empty">No operational activity yet.</p>';
     const health = [['Water supply', 91, ''], ['Electrical works', 78, 'var(--blue)'], ['Sanitation', 84, 'var(--amber)'], ['Public works', 69, 'var(--red)']];
