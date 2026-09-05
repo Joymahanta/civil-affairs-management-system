@@ -36,8 +36,8 @@ function patchedSession(options = {}) {
   });
 }
 
-// SMS history used by the Civil Affairs console. Actual SMS delivery is handled by
-// TextBee using the administrator's registered Android device and SIM.
+// SMS history used by the Civil Affairs console. TextBee sends through the
+// administrator's registered Android device and its SIM.
 sessionDb.exec(`
   CREATE TABLE IF NOT EXISTS sms_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +46,6 @@ sessionDb.exec(`
     staff_id INTEGER,
     created_by INTEGER,
     status TEXT NOT NULL DEFAULT 'queued',
-    claimed_at TEXT,
     sent_at TEXT,
     error TEXT,
     gateway_message_id TEXT,
@@ -91,13 +90,10 @@ async function textbeeRequest(endpoint, options = {}) {
 }
 
 function installSmsRoutes(app) {
-  const stack = app._router?.stack;
-  if (!stack) return;
-  const healthIndex = stack.findIndex(layer => layer.route?.path === '/api/health');
-  if (healthIndex < 0) return;
-  const router = express.Router();
-
-  router.get('/api/staff/sms/status', async (req, res) => {
+  // Register routes directly on the existing Express app. The previous version
+  // tried to splice a child router's private _router stack; on this Express
+  // version that stack can be undefined during startup and crashes the service.
+  app.get('/api/staff/sms/status', async (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS status.' });
     if (!process.env.TEXTBEE_API_KEY) return res.json({ configured: false, message: 'TextBee API key is not configured.' });
     try {
@@ -127,7 +123,7 @@ function installSmsRoutes(app) {
     }
   });
 
-  router.post('/api/staff/sms', async (req, res, next) => {
+  app.post('/api/staff/sms', async (req, res, next) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to send SMS updates.' });
     const message = String(req.body?.message || '').trim();
     if (!message) return res.status(400).json({ error: 'Enter an SMS message.' });
@@ -146,22 +142,32 @@ function installSmsRoutes(app) {
     try {
       ids = sessionDb.transaction(() => eligible.map(person => insert.run(person.recipient, message, person.id, req.session.user.id, 'sending', stamp, stamp).lastInsertRowid))();
 
+      const body = {
+        recipients: eligible.map(person => person.recipient),
+        message
+      };
+      if (process.env.TEXTBEE_DEVICE_ID) body.deviceId = process.env.TEXTBEE_DEVICE_ID;
+      if (process.env.TEXTBEE_SIM_SUBSCRIPTION_ID) body.simSubscriptionId = Number(process.env.TEXTBEE_SIM_SUBSCRIPTION_ID);
+
       const result = await textbeeRequest('/send-sms', {
         method: 'POST',
-        body: JSON.stringify({
-          recipients: eligible.map(person => person.recipient),
-          message
-        })
+        body: JSON.stringify(body)
       });
 
-      const batch = result?.data?.smsBatchId || null;
-      const successCount = Number(result?.data?.successCount ?? result?.data?.recipientCount ?? eligible.length);
-      const failureCount = Number(result?.data?.failureCount ?? 0);
-      const accepted = Math.max(0, successCount - failureCount);
+      const data = result?.data || {};
+      const batch = data.smsBatchId || null;
+      const successCount = Number(data.successCount ?? data.recipientCount ?? (data.success ? eligible.length : 0));
+      const failureCount = Number(data.failureCount ?? 0);
+      const accepted = Math.max(0, Math.min(eligible.length, successCount - failureCount));
       const finalStatus = accepted > 0 ? 'accepted' : 'failed';
-      const finalError = accepted > 0 ? null : String(result?.data?.message || 'TextBee could not accept the SMS.').slice(0, 500);
+      const finalError = accepted > 0 ? null : String(data.message || 'TextBee could not accept the SMS.').slice(0, 500);
       const update = sessionDb.prepare('UPDATE sms_jobs SET status=?, sent_at=?, error=?, gateway_message_id=?, updated_at=? WHERE id=?');
       sessionDb.transaction(() => ids.forEach(id => update.run(finalStatus, accepted > 0 ? stamp : null, finalError, batch, new Date().toISOString(), id)))();
+
+      if (accepted > 0) {
+        const updateStaff = sessionDb.prepare('UPDATE staff SET last_sms_at=? WHERE id=?');
+        eligible.slice(0, accepted).forEach(person => updateStaff.run(stamp, person.id));
+      }
 
       const log = sessionDb.prepare('INSERT INTO activity (kind, message, created_at) VALUES (?, ?, ?)');
       log.run('sms', `${accepted} staff SMS update accepted by TextBee, sent by ${req.session.user.name}${invalid.length ? `; ${invalid.length} staff number(s) skipped` : ''}`, stamp);
@@ -182,7 +188,7 @@ function installSmsRoutes(app) {
     }
   });
 
-  router.get('/api/staff/sms/history', (req, res) => {
+  app.get('/api/staff/sms/history', (req, res) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS history.' });
     const rows = sessionDb.prepare(`
       SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id,
@@ -194,8 +200,6 @@ function installSmsRoutes(app) {
     `).all();
     res.json(rows);
   });
-
-  stack.splice(healthIndex, 0, ...router._router.stack);
 }
 
 const originalListen = express.application.listen;
