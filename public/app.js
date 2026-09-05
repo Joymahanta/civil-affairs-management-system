@@ -72,8 +72,19 @@ function initResident() {
 function initAdmin() {
   api('/api/auth/session').then(session => {
     if (!session.authenticated) { window.location.replace('/login.html'); return; }
+    updateAdminIdentity(session.user);
     initAdminConsole();
   }).catch(() => window.location.replace('/login.html'));
+}
+
+function updateAdminIdentity(user) {
+  const name = user?.name || 'Civil Officer';
+  const role = user?.role || '';
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || 'CO';
+  const footer = $('.side-footer');
+  if (footer) footer.innerHTML = `<span class="avatar">${escapeHtml(initials)}</span><span class="details"><b>${escapeHtml(name)}</b><br>Civil Officer<br>${escapeHtml(role)}</span>`;
+  const profile = $('.profile');
+  if (profile) profile.innerHTML = `<span class="avatar">${escapeHtml(initials)}</span><div>${escapeHtml(name)}<br><b>Civil Officer</b><br>${escapeHtml(role)}</div>`;
 }
 
 function initAdminConsole() {
