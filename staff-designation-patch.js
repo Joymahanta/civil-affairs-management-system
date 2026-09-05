@@ -9,8 +9,8 @@ db.pragma('foreign_keys = ON');
 
 function repairLegacyDesignations() {
   const mappings = [
-    [['waterworks', 'water', 'water supply'], 'Waterworks Supervisor'],
-    [['electrical', 'electric', 'electrician'], 'Electrical Supervisor'],
+    [['waterworks', 'water supply'], 'Waterworks Supervisor'],
+    [['electrical', 'electrician', 'electric'], 'Electrical Supervisor'],
     [['sanitation', 'garbage', 'waste'], 'Sanitation Officer'],
     [['inspection', 'inspector'], 'Field Inspector'],
     [['roads', 'road'], 'Junior Engineer'],
@@ -19,12 +19,13 @@ function repairLegacyDesignations() {
 
   const update = db.prepare('UPDATE staff SET designation_id=? WHERE id=?');
   const findDesignation = db.prepare('SELECT id FROM designations WHERE lower(name)=lower(?)');
-  const staff = db.prepare('SELECT id, department, designation_id FROM staff').all();
+  const staff = db.prepare(`SELECT s.id, s.department, d.name AS designation
+    FROM staff s LEFT JOIN designations d ON d.id=s.designation_id`).all();
 
   db.transaction(() => {
     for (const person of staff) {
       const department = String(person.department || '').trim().toLowerCase();
-      if (!department || !['', 'unassigned'].includes(department) && person.designation_id) continue;
+      if (!department || person.designation && person.designation.toLowerCase() !== 'unassigned') continue;
       const match = mappings.find(([aliases]) => aliases.some(alias => department.includes(alias)));
       if (!match) continue;
       const designation = findDesignation.get(match[1]);
@@ -34,11 +35,8 @@ function repairLegacyDesignations() {
 }
 
 function installStaffDesignationRepair() {
-  try {
-    repairLegacyDesignations();
-  } catch (error) {
-    console.error('[staff-designation] repair skipped:', error.message || error);
-  }
+  try { repairLegacyDesignations(); }
+  catch (error) { console.error('[staff-designation] repair skipped:', error.message || error); }
 }
 
 module.exports = { installStaffDesignationRepair };
