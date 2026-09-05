@@ -394,9 +394,7 @@ app.post('/api/staff', requireAuth, (req, res) => {
     const designation = db.prepare('SELECT id FROM designations WHERE id=?').get(designationId);
     if (!designation) return res.status(400).json({ error: 'Selected designation was not found.' });
   }
-  const result = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)').run(
-    name.trim(), designationId ? Number(designationId) : null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null
-  );
+  const result = db.prepare('INSERT INTO staff (name, designation_id, department, phone, attendance, current_task) VALUES (?, ?, ?, ?, ?, ?)').run(name.trim(), designationId ? Number(designationId) : null, department.trim(), phone.trim(), attendance, String(currentTask).trim() || null);
   logActivity('staff', `Staff member added — ${name.trim()}`);
   res.status(201).json(db.prepare('SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?').get(result.lastInsertRowid));
 });
@@ -516,7 +514,11 @@ app.get('/api/insights', requireAuth, (_, res) => {
 app.get('/admin.html', (req, res, next) => {
   if (!req.session?.user) return res.redirect('/login.html');
   next();
-}, (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+}, (_, res) => {
+  const file = path.join(__dirname, 'public', 'admin.html');
+  const html = fs.readFileSync(file, 'utf8').replace('</body>', '<script src="/access-management.js"></script></body>');
+  res.type('html').send(html);
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.listen(PORT, () => console.log(`Civil Affairs is running at http://localhost:${PORT}`));
