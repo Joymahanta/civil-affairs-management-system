@@ -18,5 +18,34 @@
 <div class="modal-backdrop" id="sms-modal"><form class="modal" id="sms-form"><button type="button" class="close" data-close="sms-modal">×</button><h2>Send SMS task update</h2><p class="sub">This development build records the dispatch for all on-duty staff. Connect a provider to send live SMS.</p><div class="field"><label>Message</label><textarea name="message" required placeholder="e.g. Report to Sector 4 store by 10:00 AM."></textarea></div><p class="error hidden"></p><button class="button" style="width:100%">Record SMS dispatch</button></form></div>
 <div class="modal-backdrop" id="equipment-modal"><form class="modal" id="equipment-form"><button type="button" class="close" data-close="equipment-modal">×</button><h2>Update equipment</h2><p class="sub" id="equipment-name"></p><input type="hidden" name="id"><div class="form-grid"><div class="field"><label>Holder</label><input name="holder" placeholder="Staff member or team"></div><div class="field"><label>Expected return</label><input name="expectedReturn" type="date"></div></div><div class="form-grid"><div class="field"><label>Condition</label><select name="condition"><option>Good</option><option>Service due</option><option>Needs repair</option></select></div><div class="field"><label>Status</label><select name="status"><option>Available</option><option>In use</option><option>Review</option><option>Repair</option></select></div></div><p class="error hidden"></p><button class="button" style="width:100%">Save equipment update</button></form></div>
 <div class="modal-backdrop" id="tender-modal"><form class="modal" id="tender-form"><button type="button" class="close" data-close="tender-modal">×</button><h2>Issue tender</h2><p class="sub">Create a tender draft in the procurement register.</p><div class="field"><label>Scope of work</label><textarea name="scope" required placeholder="Describe the work to be tendered"></textarea></div><div class="field"><label>Closing date</label><input name="closingDate" type="date" required></div><p class="error hidden"></p><button class="button" style="width:100%">Create tender draft</button></form></div>
-<div class="modal-backdrop" id="tender-edit-modal"><form class="modal" id="tender-edit-form"><button type="button" class="close" data-close="tender-edit-modal">×</button><h2>Update tender</h2><p class="sub" id="tender-name"></p><input type="hidden" name="id"><div class="form-grid"><div class="field"><label>Bids received</label><input name="bids" type="number" min="0"></div><div class="field"><label>Status</label><select name="status"><option>Draft</option><option>Open</option><option>Evaluation</option><option>Awarded</option><option>Closed</option></select></div></div><p class="error hidden"></p><button class="button" style="width:100%">Save tender update</button></form></div>
-<div class="toast" id="toast" role="status"></div><script src="/app.js"></script></body></html>
+<div class="modal-backdrop" id="tender-edit-modal"><form class="modal" id="tender-edit-form"><button type="button" class="close" data-close="tender-edit-modal">×</button><h2>Update tender</h2><p class="sub" id="tender-no"></p><input type="hidden" name="id"><div class="form-grid"><div class="field"><label>Status</label><select name="status"><option>Draft</option><option>Open</option><option>Evaluation</option><option>Awarded</option><option>Closed</option></select></div><div class="field"><label>Bid count</label><input name="bids" type="number" min="0"></div></div><p class="error hidden"></p><button class="button" style="width:100%">Save tender update</button></form></div>
+<div class="toast" id="toast" role="status"></div><script src="/app.js"></script><script>
+(() => {
+  const button = document.getElementById('open-add-staff');
+  const modal = document.getElementById('add-staff-modal');
+  const form = document.getElementById('add-staff-form');
+  if (!button || !modal || !form) return;
+  button.addEventListener('click', () => { form.reset(); modal.classList.add('show'); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const submit = form.querySelector('button[type="submit"]');
+    const error = form.querySelector('.error');
+    error.textContent = '';
+    error.classList.add('hidden');
+    submit.disabled = true;
+    try {
+      const values = Object.fromEntries(new FormData(form));
+      const response = await fetch('/api/staff', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Could not add staff member.');
+      modal.classList.remove('show');
+      window.location.reload();
+    } catch (err) {
+      error.textContent = err.message;
+      error.classList.remove('hidden');
+    } finally {
+      submit.disabled = false;
+    }
+  });
+})();
+</script></body></html>
