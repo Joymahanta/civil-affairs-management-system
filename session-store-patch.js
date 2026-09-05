@@ -36,8 +36,8 @@ function patchedSession(options = {}) {
   });
 }
 
-// SMS gateway queue. The Android companion polls this queue and sends messages
-// through the phone's SIM. No SMS provider or per-message API is required.
+// SMS history used by the Civil Affairs console. Actual SMS delivery is handled by
+// TextBee using the administrator's registered Android device and SIM.
 sessionDb.exec(`
   CREATE TABLE IF NOT EXISTS sms_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,74 +55,144 @@ sessionDb.exec(`
   );
 `);
 
-function smsGatewayToken(req) {
-  return String(req.get('x-gateway-token') || req.query.token || '');
+function normalizeIndianPhone(value) {
+  const raw = String(value || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+  if (raw.startsWith('+') && digits.length >= 10) return `+${digits}`;
+  return '';
 }
-function smsGatewayAuthorized(req) {
-  const expected = String(process.env.SMS_GATEWAY_TOKEN || '');
-  return Boolean(expected && smsGatewayToken(req) && smsGatewayToken(req) === expected);
+
+async function textbeeRequest(endpoint, options = {}) {
+  const apiKey = String(process.env.TEXTBEE_API_KEY || '').trim();
+  if (!apiKey) {
+    const error = new Error('TextBee is not configured. Add TEXTBEE_API_KEY to the Render service environment.');
+    error.status = 503;
+    throw error;
+  }
+  const response = await fetch(`https://api.textbee.dev/api/v1/gateway${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.error || payload?.message || `TextBee returned HTTP ${response.status}.`;
+    const error = new Error(message);
+    error.status = response.status === 429 ? 429 : response.status >= 500 ? 502 : 502;
+    error.details = payload;
+    throw error;
+  }
+  return payload;
 }
-function installSmsGatewayRoutes(app) {
+
+function installSmsRoutes(app) {
   const stack = app._router?.stack;
   if (!stack) return;
   const healthIndex = stack.findIndex(layer => layer.route?.path === '/api/health');
   if (healthIndex < 0) return;
   const router = express.Router();
 
-  router.post('/api/staff/sms', (req, res, next) => {
+  router.get('/api/staff/sms/status', async (req, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS status.' });
+    if (!process.env.TEXTBEE_API_KEY) return res.json({ configured: false, message: 'TextBee API key is not configured.' });
+    try {
+      const [devices, stats] = await Promise.all([
+        textbeeRequest('/devices'),
+        textbeeRequest('/stats')
+      ]);
+      const rows = Array.isArray(devices?.data) ? devices.data : [];
+      const device = rows.find(item => item.isDefault) || rows.find(item => item.enabled) || rows[0] || null;
+      res.json({
+        configured: true,
+        connected: Boolean(device?.enabled),
+        device: device ? {
+          id: device._id,
+          name: device.name || `${device.manufacturer || device.brand || ''} ${device.model || ''}`.trim(),
+          enabled: device.enabled,
+          isDefault: device.isDefault
+        } : null,
+        totals: stats?.data ? {
+          sent: stats.data.totalSentSMSCount,
+          received: stats.data.totalReceivedSMSCount,
+          devices: stats.data.totalDeviceCount
+        } : null
+      });
+    } catch (error) {
+      res.status(error.status || 502).json({ configured: true, connected: false, error: error.message });
+    }
+  });
+
+  router.post('/api/staff/sms', async (req, res, next) => {
     if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to send SMS updates.' });
     const message = String(req.body?.message || '').trim();
     if (!message) return res.status(400).json({ error: 'Enter an SMS message.' });
     if (message.length > 1000) return res.status(400).json({ error: 'SMS message is too long.' });
+    if (!process.env.TEXTBEE_API_KEY) return res.status(503).json({ error: 'TextBee is not configured yet. Add TEXTBEE_API_KEY in the Render service environment.' });
+
     const staff = sessionDb.prepare("SELECT id, name, phone FROM staff WHERE attendance='Present' AND phone IS NOT NULL AND trim(phone) != '' ORDER BY id").all();
-    if (!staff.length) return res.status(400).json({ error: 'No on-duty staff have a mobile number.' });
-    if (!process.env.SMS_GATEWAY_TOKEN) return res.status(503).json({ error: 'SMS gateway is not configured yet. Set SMS_GATEWAY_TOKEN in the service environment.' });
+    const recipients = staff.map(person => ({ ...person, recipient: normalizeIndianPhone(person.phone) }));
+    const invalid = recipients.filter(person => !person.recipient);
+    const eligible = recipients.filter(person => person.recipient);
+    if (!eligible.length) return res.status(400).json({ error: 'No on-duty staff have a valid mobile number.' });
+
+    const stamp = new Date().toISOString();
+    const insert = sessionDb.prepare('INSERT INTO sms_jobs (recipient, message, staff_id, created_by, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    let ids = [];
     try {
-      const stamp = new Date().toISOString();
-      const insert = sessionDb.prepare('INSERT INTO sms_jobs (recipient, message, staff_id, created_by, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      const create = sessionDb.transaction(() => staff.map(person => insert.run(person.phone, message, person.id, req.session.user.id, 'queued', stamp, stamp).lastInsertRowid));
-      const ids = create();
+      ids = sessionDb.transaction(() => eligible.map(person => insert.run(person.recipient, message, person.id, req.session.user.id, 'sending', stamp, stamp).lastInsertRowid))();
+
+      const result = await textbeeRequest('/send-sms', {
+        method: 'POST',
+        body: JSON.stringify({
+          recipients: eligible.map(person => person.recipient),
+          message
+        })
+      });
+
+      const batch = result?.data?.smsBatchId || null;
+      const successCount = Number(result?.data?.successCount ?? result?.data?.recipientCount ?? eligible.length);
+      const failureCount = Number(result?.data?.failureCount ?? 0);
+      const accepted = Math.max(0, successCount - failureCount);
+      const finalStatus = accepted > 0 ? 'accepted' : 'failed';
+      const finalError = accepted > 0 ? null : String(result?.data?.message || 'TextBee could not accept the SMS.').slice(0, 500);
+      const update = sessionDb.prepare('UPDATE sms_jobs SET status=?, sent_at=?, error=?, gateway_message_id=?, updated_at=? WHERE id=?');
+      sessionDb.transaction(() => ids.forEach(id => update.run(finalStatus, accepted > 0 ? stamp : null, finalError, batch, new Date().toISOString(), id)))();
+
       const log = sessionDb.prepare('INSERT INTO activity (kind, message, created_at) VALUES (?, ?, ?)');
-      log.run('sms', `${ids.length} staff SMS update queued by ${req.session.user.name}` , stamp);
-      res.json({ ok: true, queued: ids.length, sent: ids.length });
-    } catch (error) { next(error); }
-  });
+      log.run('sms', `${accepted} staff SMS update accepted by TextBee, sent by ${req.session.user.name}${invalid.length ? `; ${invalid.length} staff number(s) skipped` : ''}`, stamp);
 
-  router.get('/api/sms/gateway/jobs', (req, res) => {
-    if (!smsGatewayAuthorized(req)) return res.status(401).json({ error: 'Invalid SMS gateway token.' });
-    const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 20);
-    const stamp = new Date().toISOString();
-    sessionDb.prepare("UPDATE sms_jobs SET status='queued', claimed_at=NULL, updated_at=? WHERE status='sending' AND claimed_at < datetime(?, '-5 minutes')").run(stamp, stamp);
-    const claim = sessionDb.transaction(() => {
-      const rows = sessionDb.prepare("SELECT id, recipient, message FROM sms_jobs WHERE status='queued' ORDER BY id LIMIT ?").all(limit);
-      if (!rows.length) return [];
-      const update = sessionDb.prepare("UPDATE sms_jobs SET status='sending', claimed_at=?, updated_at=? WHERE id=? AND status='queued'");
-      return rows.filter(row => update.run(stamp, stamp, row.id).changes).map(row => ({ ...row, status: 'sending' }));
-    });
-    res.json({ jobs: claim() });
-  });
-
-  router.post('/api/sms/gateway/result', (req, res) => {
-    if (!smsGatewayAuthorized(req)) return res.status(401).json({ error: 'Invalid SMS gateway token.' });
-    const id = Number(req.body?.id);
-    if (!id) return res.status(400).json({ error: 'Job id is required.' });
-    const status = req.body?.success ? 'sent' : 'failed';
-    const error = String(req.body?.error || '').slice(0, 500) || null;
-    const messageId = String(req.body?.messageId || '').slice(0, 200) || null;
-    const stamp = new Date().toISOString();
-    const result = sessionDb.prepare('UPDATE sms_jobs SET status=?, sent_at=?, error=?, gateway_message_id=?, updated_at=? WHERE id=?').run(status, status === 'sent' ? stamp : null, error, messageId, stamp, id);
-    if (!result.changes) return res.status(404).json({ error: 'SMS job not found.' });
-    if (status === 'sent') {
-      const staffId = sessionDb.prepare('SELECT staff_id FROM sms_jobs WHERE id=?').get(id)?.staff_id;
-      if (staffId) sessionDb.prepare('UPDATE staff SET last_sms_at=? WHERE id=?').run(stamp, staffId);
+      res.json({
+        ok: accepted > 0,
+        sent: accepted,
+        accepted,
+        failed: Math.max(0, eligible.length - accepted) + invalid.length,
+        skipped: invalid.length,
+        batchId: batch
+      });
+    } catch (error) {
+      if (ids.length) {
+        sessionDb.prepare("UPDATE sms_jobs SET status='failed', error=?, updated_at=? WHERE id IN (" + ids.map(() => '?').join(',') + ")").run(String(error.message).slice(0, 500), new Date().toISOString(), ...ids);
+      }
+      next(error);
     }
-    res.json({ ok: true });
   });
 
-  router.get('/api/sms/gateway/health', (req, res) => {
-    if (!smsGatewayAuthorized(req)) return res.status(401).json({ error: 'Invalid SMS gateway token.' });
-    const queued = sessionDb.prepare("SELECT COUNT(*) AS count FROM sms_jobs WHERE status IN ('queued','sending')").get().count;
-    res.json({ ok: true, queued });
+  router.get('/api/staff/sms/history', (req, res) => {
+    if (!req.session?.user) return res.status(401).json({ error: 'Please sign in to view SMS history.' });
+    const rows = sessionDb.prepare(`
+      SELECT s.id, s.recipient, s.message, s.status, s.sent_at, s.error, s.gateway_message_id,
+             s.created_at, st.name AS staff_name
+      FROM sms_jobs s
+      LEFT JOIN staff st ON st.id = s.staff_id
+      ORDER BY s.id DESC
+      LIMIT 100
+    `).all();
+    res.json(rows);
   });
 
   stack.splice(healthIndex, 0, ...router._router.stack);
@@ -130,7 +200,7 @@ function installSmsGatewayRoutes(app) {
 
 const originalListen = express.application.listen;
 express.application.listen = function patchedListen(...args) {
-  installSmsGatewayRoutes(this);
+  installSmsRoutes(this);
   return originalListen.apply(this, args);
 };
 
