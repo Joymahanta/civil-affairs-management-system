@@ -19,43 +19,46 @@
     if (!messageField) return;
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'field';
+    wrapper.className = 'field sms-recipient-picker';
     wrapper.innerHTML = `
-      <label>Send to</label>
-      <div class="consent" style="margin-bottom:10px">
+      <div class="sms-recipient-header"><label>Send to</label><span class="sub" id="sms-recipient-count">Loading…</span></div>
+      <label class="sms-select-all-row">
         <input type="checkbox" id="sms-select-all">
-        <span><b>Select all</b></span>
-      </div>
-      <div id="sms-recipient-list" style="display:grid;gap:8px;max-height:220px;overflow:auto;padding:4px 2px"></div>
-      <small class="sub" id="sms-recipient-count">Loading staff…</small>
+        <span><b>Select all staff</b><br><small class="sub">Send this update to everyone with a valid mobile number</small></span>
+      </label>
+      <div id="sms-recipient-list" class="sms-recipient-list"></div>
     `;
     form.insertBefore(wrapper, messageField);
 
     try {
-      const staff = await api('/api/staff');
+      const payload = await api('/api/staff');
+      const staff = Array.isArray(payload) ? payload : (Array.isArray(payload?.staff) ? payload.staff : []);
       const eligible = staff.filter(item => String(item.phone || '').trim());
       const list = document.getElementById('sms-recipient-list');
+      const countNode = document.getElementById('sms-recipient-count');
+      const selectAll = document.getElementById('sms-select-all');
+
       if (!eligible.length) {
         list.innerHTML = '<span class="sub">No staff members have a phone number.</span>';
-        document.getElementById('sms-select-all').disabled = true;
-        document.getElementById('sms-recipient-count').textContent = '0 recipients available';
+        selectAll.disabled = true;
+        countNode.textContent = '0 available';
         return;
       }
 
       list.innerHTML = eligible.map(item => `
-        <label class="consent" style="justify-content:flex-start;gap:10px">
+        <label class="sms-recipient-row">
           <input type="checkbox" name="smsRecipient" value="${esc(item.id)}">
           <span><b>${esc(item.name)}</b> · ${esc(item.department || 'Staff')} · ${esc(item.phone)}</span>
         </label>
       `).join('');
 
-      const selectAll = document.getElementById('sms-select-all');
       const boxes = () => [...list.querySelectorAll('input[name="smsRecipient"]')];
       const updateState = () => {
-        const checked = boxes().filter(box => box.checked).length;
-        selectAll.checked = checked === boxes().length && boxes().length > 0;
-        selectAll.indeterminate = checked > 0 && checked < boxes().length;
-        document.getElementById('sms-recipient-count').textContent = `${checked} of ${boxes().length} staff selected`;
+        const all = boxes();
+        const checked = all.filter(box => box.checked).length;
+        selectAll.checked = checked === all.length && all.length > 0;
+        selectAll.indeterminate = checked > 0 && checked < all.length;
+        countNode.textContent = `${checked} of ${all.length} selected`;
       };
       selectAll.addEventListener('change', () => {
         boxes().forEach(box => { box.checked = selectAll.checked; });
@@ -65,7 +68,7 @@
       updateState();
     } catch (error) {
       document.getElementById('sms-recipient-list').innerHTML = `<span class="sub">${esc(error.message)}</span>`;
-      document.getElementById('sms-recipient-count').textContent = 'Could not load staff recipients';
+      document.getElementById('sms-recipient-count').textContent = 'Could not load staff';
     }
   }
 
@@ -101,7 +104,7 @@
       const selectAll = document.getElementById('sms-select-all');
       if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; }
       const count = document.getElementById('sms-recipient-count');
-      if (count) count.textContent = `${selected.length} staff selected`;
+      if (count) count.textContent = `${selected.length} selected`;
       const toastNode = document.getElementById('toast');
       if (toastNode) {
         toastNode.textContent = `SMS accepted for ${data.sent || selected.length} selected staff member${(data.sent || selected.length) === 1 ? '' : 's'}.`;
@@ -110,10 +113,8 @@
         window.toastTimeout = setTimeout(() => toastNode.classList.remove('show'), 4400);
       }
     } catch (error) {
-      if (error) {
-        const target = form.querySelector('.error');
-        if (target) { target.textContent = error.message; target.classList.remove('hidden'); }
-      }
+      const target = form.querySelector('.error');
+      if (target) { target.textContent = error.message; target.classList.remove('hidden'); }
     } finally {
       if (button) { button.disabled = false; button.textContent = 'Send SMS update'; }
     }
