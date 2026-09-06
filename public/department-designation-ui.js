@@ -279,6 +279,10 @@
       if (deleteDepartment) {
         const item = departments.find(d => Number(d.id) === Number(deleteDepartment.dataset.deleteDepartment));
         if (!item || !confirm(`Delete ${item.name}?`)) return;
+        if (Number(item.designation_count || 0) > 0) {
+          alert('This department has designations. Delete or move those designations first.');
+          return;
+        }
 
         try {
           await api(`/api/departments/${item.id}`, { method: 'DELETE' });
@@ -309,6 +313,10 @@
       if (deleteDesignation) {
         const item = designations.find(d => Number(d.id) === Number(deleteDesignation.dataset.deleteDesignation));
         if (!item || !confirm(`Delete ${item.name}?`)) return;
+        if (Number(item.staff_count || 0) > 0) {
+          alert('This designation is assigned to staff. Reassign those staff members first.');
+          return;
+        }
 
         try {
           await api(`/api/designations/${item.id}`, { method: 'DELETE' });

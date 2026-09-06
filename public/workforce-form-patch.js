@@ -71,7 +71,19 @@
     } catch (error) { console.error('[workforce-form]', error); }
   }
   function repair() { repairEditForm(); const add = document.getElementById('add-staff-form'); if (add && add.dataset.departmentDesignationReady !== '1') { add.dataset.departmentDesignationReady = '1'; repairAddForm().catch(error => console.error('[workforce-form]', error)); } }
-  document.addEventListener('click', event => { const button = event.target.closest('[data-edit-staff]'); if (button) setTimeout(() => populateEdit(button.dataset.editStaff), 0); }, true);
+  document.addEventListener('click', event => {
+    const editButton = event.target.closest('[data-edit-staff]');
+    if (editButton) setTimeout(() => populateEdit(editButton.dataset.editStaff), 0);
+
+    const addButton = event.target.closest('#open-add-staff');
+    if (addButton) setTimeout(() => repairAddForm(), 0);
+  }, true);
+
+  // Department/designation managers dispatch this event after every add, update or delete.
+  // Refresh the staff form immediately so newly-created departments/designations are available.
+  document.addEventListener('workforce-settings-changed', () => {
+    repairAddForm().catch(error => console.error('[workforce-form]', error));
+  });
+
   repair(); const observer = new MutationObserver(() => repair()); observer.observe(document.documentElement, { childList:true, subtree:true });
 })();
- 
