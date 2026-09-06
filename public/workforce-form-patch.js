@@ -20,7 +20,7 @@
   document.addEventListener('click', event => { const editButton = event.target.closest('[data-edit-staff]'); if (editButton) setTimeout(() => populateEdit(editButton.dataset.editStaff), 0); const addButton = event.target.closest('#open-add-staff'); if (addButton) setTimeout(() => repairAddForm(), 0); });
   document.addEventListener('workforce-settings-changed', () => repairAddForm().catch(error => console.error('[workforce-form]', error)));
   repair(); const observer = new MutationObserver(() => repair()); observer.observe(document.documentElement, { childList:true, subtree:true });
-  const loadScript = src => { if (document.querySelector(`script[src="${src}"]`)) return; const script=document.createElement('script'); script.src=src; script.defer=true; document.head.appendChild(script); };
-  const loadPatches = () => { loadScript('/workforce-sms-patch.js'); loadScript('/qr-scanner.js'); loadScript('/qr-management.js'); };
+  const loadScript = src => { if (document.querySelector(`script[src^="${src}"]`)) return; const script=document.createElement('script'); script.src=src; script.defer=true; document.head.appendChild(script); };
+  const loadPatches = () => { loadScript('/workforce-sms-patch.js'); loadScript('/qr-scanner.js'); loadScript('/qr-management.js?v=e8a77839'); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadPatches, { once:true }); else loadPatches();
 })();
