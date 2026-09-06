@@ -93,6 +93,13 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS departments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS staff (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -150,6 +157,8 @@ function requireAdminPage(req, res, next) {
 }
 if (!staffColumns.some(column => column.name === 'email')) db.exec('ALTER TABLE staff ADD COLUMN email TEXT');
 if (!staffColumns.some(column => column.name === 'user_id')) db.exec('ALTER TABLE staff ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL');
+const designationColumns = db.prepare('PRAGMA table_info(designations)').all();
+if (!designationColumns.some(column => column.name === 'department_id')) db.exec('ALTER TABLE designations ADD COLUMN department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL');
 const userColumns = db.prepare('PRAGMA table_info(users)').all();
 if (!userColumns.some(column => column.name === 'status')) db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'Active'");
 
@@ -167,6 +176,13 @@ const designationDefaults = [
 ];
 const addDesignation = db.prepare('INSERT OR IGNORE INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)');
 designationDefaults.forEach(([name, description]) => addDesignation.run(name, description, now(), now()));
+
+const departmentDefaults = ['Administration', 'Electrical', 'Waterworks', 'Sanitation', 'Engineering', 'Inspection', 'Roads', 'Horticulture'];
+const addDepartment = db.prepare('INSERT OR IGNORE INTO departments (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)');
+departmentDefaults.forEach(name => addDepartment.run(name, `${name} department`, now(), now()));
+db.prepare('SELECT DISTINCT department FROM staff WHERE department IS NOT NULL AND trim(department) <> ?').all('').forEach(row => addDepartment.run(row.department.trim(), `${row.department.trim()} department`, now(), now()));
+const administration = db.prepare('SELECT id FROM departments WHERE name=?').get('Administration');
+db.prepare('UPDATE designations SET department_id=? WHERE department_id IS NULL').run(administration.id);
 
 const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD;
 if (db.prepare('SELECT COUNT(*) AS count FROM users').get().count === 0 && required(initialAdminPassword)) {
@@ -219,6 +235,7 @@ if (unassignedStaffCount > 0) {
   const unassigned = db.prepare('SELECT id FROM designations WHERE name=?').get('Unassigned');
   db.prepare('UPDATE staff SET designation_id=? WHERE designation_id IS NULL').run(unassigned.id);
 }
+db.prepare('SELECT DISTINCT department FROM staff WHERE department IS NOT NULL AND trim(department) <> ?').all('').forEach(row => addDepartment.run(row.department.trim(), `${row.department.trim()} department`, now(), now()));
 
 if (db.prepare('SELECT COUNT(*) AS count FROM complaints').get().count === 0) {
   const addComplaint = db.prepare(`INSERT INTO complaints
@@ -350,8 +367,9 @@ app.post('/api/staff', requireAuth, (req, res) => {
   const { name, designationId, department, phone, attendance = 'Present', currentTask = '', email = '', createLogin = false, password = '', role = 'Sub-administrator' } = req.body;
   if (![name, designationId, department, phone].every(required)) return res.status(400).json({ error: 'Name, designation, department, and phone are required.' });
   if (!['Present', 'Absent'].includes(attendance)) return res.status(400).json({ error: 'Invalid attendance value.' });
-  const designation = db.prepare('SELECT id FROM designations WHERE id=?').get(Number(designationId));
+  const designation = db.prepare('SELECT d.id, p.name AS department FROM designations d JOIN departments p ON p.id=d.department_id WHERE d.id=?').get(Number(designationId));
   if (!designation) return res.status(400).json({ error: 'Selected designation does not exist.' });
+  if (designation.department !== department.trim()) return res.status(400).json({ error: 'Select a designation from the selected department.' });
   const wantsLogin = createLogin === true || createLogin === 'true' || createLogin === 'on';
   if (email && !/^\S+@\S+\.\S+$/.test(email.trim())) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (wantsLogin && (!required(email) || !required(password))) return res.status(400).json({ error: 'Email and password are required to create a login account.' });
@@ -400,17 +418,40 @@ app.patch('/api/staff/:id', requireAuth, (req, res) => {
   res.json(db.prepare(`SELECT s.*, d.name AS designation FROM staff s LEFT JOIN designations d ON d.id=s.designation_id WHERE s.id=?`).get(id));
 });
 
+app.get('/api/departments', requireAuth, (_, res) => {
+  res.json(db.prepare('SELECT d.*, COUNT(g.id) AS designation_count FROM departments d LEFT JOIN designations g ON g.department_id=d.id GROUP BY d.id ORDER BY d.name').all());
+});
+app.post('/api/departments', requireAuth, (req, res) => {
+  const { name, description = '' } = req.body;
+  if (!required(name)) return res.status(400).json({ error: 'Department name is required.' });
+  try { const stamp = now(); const result = db.prepare('INSERT INTO departments (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name.trim(), description.trim(), stamp, stamp); logActivity('department', `${name.trim()} department created`); res.status(201).json(db.prepare('SELECT * FROM departments WHERE id=?').get(result.lastInsertRowid)); }
+  catch (error) { if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That department already exists.' }); throw error; }
+});
+app.patch('/api/departments/:id', requireAuth, (req, res) => {
+  const current = db.prepare('SELECT * FROM departments WHERE id=?').get(Number(req.params.id));
+  if (!current) return res.status(404).json({ error: 'Department not found.' });
+  const name = required(req.body.name) ? req.body.name.trim() : current.name; const description = typeof req.body.description === 'string' ? req.body.description.trim() : current.description || '';
+  try { db.prepare('UPDATE departments SET name=?, description=?, updated_at=? WHERE id=?').run(name, description, now(), current.id); logActivity('department', `${current.name} department updated`); res.json(db.prepare('SELECT * FROM departments WHERE id=?').get(current.id)); }
+  catch (error) { if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That department already exists.' }); throw error; }
+});
+app.delete('/api/departments/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id); const count = db.prepare('SELECT COUNT(*) AS count FROM designations WHERE department_id=?').get(id).count;
+  if (count > 0) return res.status(409).json({ error: 'This department has designations and cannot be deleted.' });
+  const result = db.prepare('DELETE FROM departments WHERE id=?').run(id); if (!result.changes) return res.status(404).json({ error: 'Department not found.' }); logActivity('department', `${id} department deleted`); res.json({ ok: true });
+});
+
 app.get('/api/designations', requireAuth, (_, res) => {
-  res.json(db.prepare('SELECT d.*, COUNT(s.id) AS staff_count FROM designations d LEFT JOIN staff s ON s.designation_id=d.id GROUP BY d.id ORDER BY d.name').all());
+  res.json(db.prepare('SELECT d.*, p.name AS department, COUNT(s.id) AS staff_count FROM designations d LEFT JOIN departments p ON p.id=d.department_id LEFT JOIN staff s ON s.designation_id=d.id GROUP BY d.id ORDER BY p.name, d.name').all());
 });
 app.post('/api/designations', requireAuth, (req, res) => {
-  const { name, description = '' } = req.body;
-  if (!required(name)) return res.status(400).json({ error: 'Designation name is required.' });
+  const { name, description = '', departmentId } = req.body;
+  if (![name, departmentId].every(required)) return res.status(400).json({ error: 'Designation name and department are required.' });
+  if (!db.prepare('SELECT id FROM departments WHERE id=?').get(Number(departmentId))) return res.status(400).json({ error: 'Selected department does not exist.' });
   try {
     const stamp = now();
-    const result = db.prepare('INSERT INTO designations (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name.trim(), description.trim(), stamp, stamp);
+    const result = db.prepare('INSERT INTO designations (name, description, department_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(name.trim(), description.trim(), Number(departmentId), stamp, stamp);
     logActivity('designation', `${name.trim()} designation created`);
-    res.status(201).json(db.prepare('SELECT d.*, 0 AS staff_count FROM designations d WHERE id=?').get(result.lastInsertRowid));
+    res.status(201).json(db.prepare('SELECT d.*, p.name AS department, 0 AS staff_count FROM designations d LEFT JOIN departments p ON p.id=d.department_id WHERE d.id=?').get(result.lastInsertRowid));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
     throw error;
@@ -422,10 +463,12 @@ app.patch('/api/designations/:id', requireAuth, (req, res) => {
   if (!current) return res.status(404).json({ error: 'Designation not found.' });
   const name = required(req.body.name) ? req.body.name.trim() : current.name;
   const description = typeof req.body.description === 'string' ? req.body.description.trim() : current.description || '';
+  const departmentId = req.body.departmentId ? Number(req.body.departmentId) : current.department_id;
+  if (!db.prepare('SELECT id FROM departments WHERE id=?').get(departmentId)) return res.status(400).json({ error: 'Selected department does not exist.' });
   try {
-    db.prepare('UPDATE designations SET name=?, description=?, updated_at=? WHERE id=?').run(name, description, now(), id);
+    db.prepare('UPDATE designations SET name=?, description=?, department_id=?, updated_at=? WHERE id=?').run(name, description, departmentId, now(), id);
     logActivity('designation', `${current.name} designation updated`);
-    res.json(db.prepare('SELECT d.*, (SELECT COUNT(*) FROM staff WHERE designation_id=d.id) AS staff_count FROM designations d WHERE d.id=?').get(id));
+    res.json(db.prepare('SELECT d.*, p.name AS department, (SELECT COUNT(*) FROM staff WHERE designation_id=d.id) AS staff_count FROM designations d LEFT JOIN departments p ON p.id=d.department_id WHERE d.id=?').get(id));
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'That designation already exists.' });
     throw error;
