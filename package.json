@@ -4,8 +4,8 @@
   "description": "Township civil administration and resident service portal",
   "main": "server.js",
   "scripts": {
-    "start": "node session-store-patch.js",
-    "dev": "node --watch session-store-patch.js",
+    "start": "node -r ./qr-management-server.js session-store-patch.js",
+    "dev": "node -r ./qr-management-server.js --watch session-store-patch.js",
     "test": "node tests/api-test.js"
   },
   "dependencies": {
