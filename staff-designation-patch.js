@@ -36,9 +36,37 @@ function repairLegacyDesignations() {
   })();
 }
 
+function repairDesignationDepartments() {
+  const mappings = [
+    ['Civil Office Administrator', 'Administration'],
+    ['Assistant Administrator', 'Administration'],
+    ['Office Assistant', 'Administration'],
+    ['Data Entry Operator', 'Administration'],
+    ['Junior Engineer', 'Engineering'],
+    ['Senior Engineer', 'Engineering'],
+    ['Sanitation Officer', 'Sanitation'],
+    ['Electrical Supervisor', 'Electrical'],
+    ['Waterworks Supervisor', 'Waterworks'],
+    ['Field Inspector', 'Inspection']
+  ];
+
+  const findDepartment = db.prepare('SELECT id FROM departments WHERE lower(name)=lower(?)');
+  const update = db.prepare('UPDATE designations SET department_id=?, updated_at=? WHERE lower(name)=lower(?)');
+  const stamp = new Date().toISOString();
+
+  db.transaction(() => {
+    for (const [designation, department] of mappings) {
+      const row = findDepartment.get(department);
+      if (row) update.run(row.id, stamp, designation);
+    }
+  })();
+}
+
 function installStaffDesignationRepair() {
-  try { repairLegacyDesignations(); }
-  catch (error) { console.error('[staff-designation] repair skipped:', error.message || error); }
+  try {
+    repairDesignationDepartments();
+    repairLegacyDesignations();
+  } catch (error) { console.error('[staff-designation] repair skipped:', error.message || error); }
 }
 
 module.exports = { installStaffDesignationRepair };
