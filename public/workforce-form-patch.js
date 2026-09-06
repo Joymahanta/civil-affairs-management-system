@@ -79,11 +79,16 @@
     if (addButton) setTimeout(() => repairAddForm(), 0);
   }, true);
 
-  // Department/designation managers dispatch this event after every add, update or delete.
-  // Refresh the staff form immediately so newly-created departments/designations are available.
   document.addEventListener('workforce-settings-changed', () => {
     repairAddForm().catch(error => console.error('[workforce-form]', error));
   });
 
   repair(); const observer = new MutationObserver(() => repair()); observer.observe(document.documentElement, { childList:true, subtree:true });
+
+  const loadSmsPatch = () => {
+    if (document.querySelector('script[src="/workforce-sms-patch.js"]')) return;
+    const script = document.createElement('script'); script.src = '/workforce-sms-patch.js'; script.defer = true; document.head.appendChild(script);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadSmsPatch, { once: true });
+  else loadSmsPatch();
 })();
