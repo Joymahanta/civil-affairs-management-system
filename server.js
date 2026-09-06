@@ -322,6 +322,36 @@ app.get('/api/complaints', requireAuth, (req, res) => {
   res.json(db.prepare(`SELECT * FROM complaints ${where} ORDER BY created_at DESC`).all(...values));
 });
 
+
+// Complaint history endpoint.
+// The operations activity log already records complaint creation and updates.
+app.get('/api/complaints/:id/history', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid complaint ID.' });
+  }
+
+  const complaint = db.prepare('SELECT id, reference FROM complaints WHERE id=?').get(id);
+  if (!complaint) return res.status(404).json({ error: 'Complaint not found.' });
+
+  const rows = db.prepare(`
+    SELECT id, kind, message, created_at
+    FROM activity
+    WHERE message LIKE ?
+    ORDER BY created_at DESC, id DESC
+  `).all(`%${complaint.reference}%`);
+
+  res.json(rows.map(row => ({
+    id: row.id,
+    action: row.kind || 'activity',
+    kind: row.kind || 'activity',
+    message: row.message,
+    details: row.message,
+    created_at: row.created_at,
+    timestamp: row.created_at
+  })));
+});
+
 app.get('/api/complaints/:reference', (req, res) => {
   const isAdmin = Boolean(req.session?.user);
   const phone = String(req.query.phone || '').replace(/[^0-9]/g, '');
