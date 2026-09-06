@@ -12,6 +12,42 @@
     $('#complaint-history-modal').addEventListener('click', e => { if(e.target.id === 'complaint-history-modal') e.currentTarget.classList.remove('show'); });
   }
 
+  function historyEvent(row) {
+    if (row.event_type) return String(row.event_type).replaceAll('-', ' ');
+    const kind = String(row.action || row.kind || 'activity').trim();
+    const labels = {
+      complaint: 'Complaint activity',
+      assignment: 'Assignment',
+      resolved: 'Resolved',
+      status: 'Status update',
+      equipment: 'Equipment activity',
+      security: 'Security activity'
+    };
+    return labels[kind.toLowerCase()] || kind.replaceAll('-', ' ');
+  }
+
+  function historyMessage(row) {
+    if (row.note) return row.note;
+    if (row.message) return row.message;
+    if (row.details) return row.details;
+    return '';
+  }
+
+  function historyChanges(row) {
+    const changes = [];
+    if (row.old_status !== row.new_status && row.new_status) changes.push(`Status: ${row.old_status || '—'} → ${row.new_status}`);
+    if ((row.old_assigned_to || '') !== (row.new_assigned_to || '')) changes.push(`Assignment: ${row.old_assigned_to || 'Unassigned'} → ${row.new_assigned_to || 'Unassigned'}`);
+    if (row.old_priority !== row.new_priority && row.new_priority) changes.push(`Priority: ${row.old_priority || '—'} → ${row.new_priority}`);
+    return changes;
+  }
+
+  function historyActor(row) {
+    if (row.changed_by_name) return row.changed_by_name;
+    const message = String(row.message || row.note || '');
+    const match = message.match(/\b(?:updated|created|assigned|resolved)\s+by\s+(.+)$/i);
+    return match ? match[1].trim() : '';
+  }
+
   async function showHistory(id, reference) {
     ensureHistoryModal();
     const modal = $('#complaint-history-modal');
@@ -21,11 +57,11 @@
     try {
       const rows = await api(`/api/complaints/${id}/history`);
       $('#history-body').innerHTML = rows.length ? rows.map(row => {
-        const changes = [];
-        if (row.old_status !== row.new_status && row.new_status) changes.push(`Status: ${row.old_status || '—'} → ${row.new_status}`);
-        if ((row.old_assigned_to || '') !== (row.new_assigned_to || '')) changes.push(`Assignment: ${row.old_assigned_to || 'Unassigned'} → ${row.new_assigned_to || 'Unassigned'}`);
-        if (row.old_priority !== row.new_priority && row.new_priority) changes.push(`Priority: ${row.old_priority || '—'} → ${row.new_priority}`);
-        return `<div class="activity"><span class="activity-dot">•</span><p><b>${esc(String(row.event_type || 'updated').replaceAll('-', ' '))}</b>${changes.length ? `<br>${esc(changes.join(' · '))}` : ''}${row.note ? `<br>${esc(row.note)}` : ''}<br><time>${esc(date(row.changed_at))}${row.changed_by_name ? ` · ${esc(row.changed_by_name)}` : ''}</time></p></div>`;
+        const changes = historyChanges(row);
+        const message = historyMessage(row);
+        const actor = historyActor(row);
+        const timestamp = row.changed_at || row.created_at || row.timestamp;
+        return `<div class="activity"><span class="activity-dot">•</span><p><b>${esc(historyEvent(row))}</b>${changes.length ? `<br>${esc(changes.join(' · '))}` : ''}${message ? `<br>${esc(message)}` : ''}<br><time>${esc(date(timestamp))}${actor ? ` · ${esc(actor)}` : ''}</time></p></div>`;
       }).join('') : '<p class="empty">No history recorded yet.</p>';
     } catch (error) { $('#history-body').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
   }
