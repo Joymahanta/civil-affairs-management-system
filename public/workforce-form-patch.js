@@ -4,91 +4,23 @@
   let designations = [];
   let loadingDepartments = null;
   let loadingDesignations = null;
-
-  async function getJson(url, options = {}) {
-    const response = await fetch(url, { cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'Could not load the workforce settings.');
-    return payload;
-  }
-  async function loadDepartments(force = false) {
-    if (loadingDepartments && !force) return loadingDepartments;
-    loadingDepartments = getJson('/api/departments').then(rows => { departments = Array.isArray(rows) ? rows : []; return departments; }).finally(() => { loadingDepartments = null; });
-    return loadingDepartments;
-  }
-  async function loadDesignations(force = false) {
-    if (loadingDesignations && !force) return loadingDesignations;
-    loadingDesignations = getJson('/api/designations').then(rows => { designations = Array.isArray(rows) ? rows : []; return designations; }).finally(() => { loadingDesignations = null; });
-    return loadingDesignations;
-  }
-  function setOptions(select, rows, placeholder, valueKey = 'id', labelKey = 'name', selected = '') {
-    if (!select) return;
-    select.innerHTML = `<option value="">${esc(placeholder)}</option>` + rows.map(row => `<option value="${esc(row[valueKey])}">${esc(row[labelKey])}</option>`).join('');
-    if (selected !== '' && selected != null) select.value = String(selected);
-  }
-  function makeDepartmentSelect(control) {
-    if (!control) return null;
-    if (control.tagName !== 'SELECT') {
-      const select = document.createElement('select'); select.name = control.name; select.id = control.id; select.required = control.required; control.replaceWith(select); control = select;
-    }
-    return control;
-  }
-  function ensureEditField(form, name, label, html) {
-    let control = form.querySelector(`[name="${name}"]`); if (control) return control;
-    const field = document.createElement('div'); field.className = 'field'; field.innerHTML = `<label>${label}</label>${html}`;
-    const anchor = form.querySelector('[name="attendance"]')?.closest('.field'); form.insertBefore(field, anchor || null); return field.querySelector(`[name="${name}"]`);
-  }
-  async function populateDepartmentSelect(select, selected = '') {
-    if (!select) return; makeDepartmentSelect(select); await loadDepartments(); setOptions(select, departments, 'Select department', 'name', 'name', selected); select.dataset.departmentReady = '1';
-  }
-  async function populateDesignationSelect(select, departmentName = '', selected = '') {
-    if (!select) return; await loadDesignations(); const department = String(departmentName || '').trim();
-    const rows = department ? designations.filter(item => String(item.department || '').trim() === department) : [];
-    setOptions(select, rows, department ? 'Select designation' : 'Select department first', 'id', 'name', selected); select.disabled = !department; select.dataset.designationsReady = '1';
-  }
-  function bindStaffDropdowns(form) {
-    if (!form || form.dataset.departmentDesignationBound === '1') return;
-    const department = makeDepartmentSelect(form.querySelector('[name="department"]')); const designation = form.querySelector('[name="designationId"]'); if (!department || !designation) return;
-    form.dataset.departmentDesignationBound = '1';
-    department.addEventListener('change', () => populateDesignationSelect(designation, department.value).catch(error => console.error('[workforce-form]', error)));
-    populateDepartmentSelect(department).then(() => { if (department.value) return populateDesignationSelect(designation, department.value, designation.value); designation.disabled = true; designation.innerHTML = '<option value="">Select department first</option>'; }).catch(error => console.error('[workforce-form]', error));
-  }
-  async function repairAddForm() {
-    const form = document.getElementById('add-staff-form'); if (!form) return; bindStaffDropdowns(form); await loadDepartments(); await loadDesignations();
-    await populateDepartmentSelect(form.querySelector('[name="department"]'), form.querySelector('[name="department"]')?.value || '');
-    const designation = form.querySelector('[name="designationId"]'); await populateDesignationSelect(designation, form.querySelector('[name="department"]')?.value || '', designation?.value || '');
-  }
-  function repairEditForm() {
-    const form = document.getElementById('staff-form'); if (!form) return;
-    ensureEditField(form, 'designationId', 'Designation', '<select name="designationId" required></select>'); ensureEditField(form, 'department', 'Department', '<select name="department" required></select>'); ensureEditField(form, 'phone', 'Phone', '<input name="phone" inputmode="numeric" required>'); bindStaffDropdowns(form);
-  }
-  async function populateEdit(id) {
-    try {
-      const rows = await getJson('/api/staff'); const item = rows.find(row => Number(row.id) === Number(id)); if (!item) return;
-      const form = document.getElementById('staff-form'); repairEditForm(); const department = form.querySelector('[name="department"]'); const designation = form.querySelector('[name="designationId"]');
-      await populateDepartmentSelect(department, item.department || ''); await populateDesignationSelect(designation, item.department || '', item.designation_id || ''); form.querySelector('[name="phone"]').value = item.phone || '';
-      const title = document.getElementById('staff-name'); if (title) title.textContent = `${item.name} · ${item.designation || item.department || ''}`;
-    } catch (error) { console.error('[workforce-form]', error); }
-  }
+  async function getJson(url, options = {}) { const response = await fetch(url, { cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options }); const payload = await response.json().catch(() => ({})); if (!response.ok) throw new Error(payload.error || 'Could not load the workforce settings.'); return payload; }
+  async function loadDepartments(force = false) { if (loadingDepartments && !force) return loadingDepartments; loadingDepartments = getJson('/api/departments').then(rows => { departments = Array.isArray(rows) ? rows : []; return departments; }).finally(() => { loadingDepartments = null; }); return loadingDepartments; }
+  async function loadDesignations(force = false) { if (loadingDesignations && !force) return loadingDesignations; loadingDesignations = getJson('/api/designations').then(rows => { designations = Array.isArray(rows) ? rows : []; return designations; }).finally(() => { loadingDesignations = null; }); return loadingDesignations; }
+  function setOptions(select, rows, placeholder, valueKey = 'id', labelKey = 'name', selected = '') { if (!select) return; select.innerHTML = `<option value="">${esc(placeholder)}</option>` + rows.map(row => `<option value="${esc(row[valueKey])}">${esc(row[labelKey])}</option>`).join(''); if (selected !== '' && selected != null) select.value = String(selected); }
+  function makeDepartmentSelect(control) { if (!control) return null; if (control.tagName !== 'SELECT') { const select = document.createElement('select'); select.name = control.name; select.id = control.id; select.required = control.required; control.replaceWith(select); control = select; } return control; }
+  function ensureEditField(form, name, label, html) { let control = form.querySelector(`[name="${name}"]`); if (control) return control; const field = document.createElement('div'); field.className = 'field'; field.innerHTML = `<label>${label}</label>${html}`; const anchor = form.querySelector('[name="attendance"]')?.closest('.field'); form.insertBefore(field, anchor || null); return field.querySelector(`[name="${name}"]`); }
+  async function populateDepartmentSelect(select, selected = '') { if (!select) return; makeDepartmentSelect(select); await loadDepartments(); setOptions(select, departments, 'Select department', 'name', 'name', selected); select.dataset.departmentReady = '1'; }
+  async function populateDesignationSelect(select, departmentName = '', selected = '') { if (!select) return; await loadDesignations(); const department = String(departmentName || '').trim(); const rows = department ? designations.filter(item => String(item.department || '').trim() === department) : []; setOptions(select, rows, department ? 'Select designation' : 'Select department first', 'id', 'name', selected); select.disabled = !department; select.dataset.designationsReady = '1'; }
+  function bindStaffDropdowns(form) { if (!form || form.dataset.departmentDesignationBound === '1') return; const department = makeDepartmentSelect(form.querySelector('[name="department"]')); const designation = form.querySelector('[name="designationId"]'); if (!department || !designation) return; form.dataset.departmentDesignationBound = '1'; department.addEventListener('change', () => populateDesignationSelect(designation, department.value).catch(error => console.error('[workforce-form]', error))); populateDepartmentSelect(department).then(() => { if (department.value) return populateDesignationSelect(designation, department.value, designation.value); designation.disabled = true; designation.innerHTML = '<option value="">Select department first</option>'; }).catch(error => console.error('[workforce-form]', error)); }
+  async function repairAddForm() { const form = document.getElementById('add-staff-form'); if (!form) return; bindStaffDropdowns(form); await loadDepartments(); await loadDesignations(); await populateDepartmentSelect(form.querySelector('[name="department"]'), form.querySelector('[name="department"]')?.value || ''); const designation = form.querySelector('[name="designationId"]'); await populateDesignationSelect(designation, form.querySelector('[name="department"]')?.value || '', designation?.value || ''); }
+  function repairEditForm() { const form = document.getElementById('staff-form'); if (!form) return; ensureEditField(form, 'designationId', 'Designation', '<select name="designationId" required></select>'); ensureEditField(form, 'department', 'Department', '<select name="department" required></select>'); ensureEditField(form, 'phone', 'Phone', '<input name="phone" inputmode="numeric" required>'); bindStaffDropdowns(form); }
+  async function populateEdit(id) { try { const rows = await getJson('/api/staff'); const item = rows.find(row => Number(row.id) === Number(id)); if (!item) return; const form = document.getElementById('staff-form'); repairEditForm(); const department = form.querySelector('[name="department"]'); const designation = form.querySelector('[name="designationId"]'); await populateDepartmentSelect(department, item.department || ''); await populateDesignationSelect(designation, item.department || '', item.designation_id || ''); form.querySelector('[name="phone"]').value = item.phone || ''; const title = document.getElementById('staff-name'); if (title) title.textContent = `${item.name} · ${item.designation || item.department || ''}`; } catch (error) { console.error('[workforce-form]', error); } }
   function repair() { repairEditForm(); const add = document.getElementById('add-staff-form'); if (add && add.dataset.departmentDesignationReady !== '1') { add.dataset.departmentDesignationReady = '1'; repairAddForm().catch(error => console.error('[workforce-form]', error)); } }
-  document.addEventListener('click', event => {
-    const editButton = event.target.closest('[data-edit-staff]');
-    if (editButton) setTimeout(() => populateEdit(editButton.dataset.editStaff), 0);
-
-    const addButton = event.target.closest('#open-add-staff');
-    if (addButton) setTimeout(() => repairAddForm(), 0);
-  }, true);
-
-  document.addEventListener('workforce-settings-changed', () => {
-    repairAddForm().catch(error => console.error('[workforce-form]', error));
-  });
-
+  document.addEventListener('click', event => { const editButton = event.target.closest('[data-edit-staff]'); if (editButton) setTimeout(() => populateEdit(editButton.dataset.editStaff), 0); const addButton = event.target.closest('#open-add-staff'); if (addButton) setTimeout(() => repairAddForm(), 0); });
+  document.addEventListener('workforce-settings-changed', () => repairAddForm().catch(error => console.error('[workforce-form]', error)));
   repair(); const observer = new MutationObserver(() => repair()); observer.observe(document.documentElement, { childList:true, subtree:true });
-
-  const loadSmsPatch = () => {
-    if (document.querySelector('script[src="/workforce-sms-patch.js"]')) return;
-    const script = document.createElement('script'); script.src = '/workforce-sms-patch.js'; script.defer = true; document.head.appendChild(script);
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadSmsPatch, { once: true });
-  else loadSmsPatch();
+  const loadScript = src => { if (document.querySelector(`script[src="${src}"]`)) return; const script=document.createElement('script'); script.src=src; script.defer=true; document.head.appendChild(script); };
+  const loadPatches = () => { loadScript('/workforce-sms-patch.js'); loadScript('/qr-scanner.js'); loadScript('/qr-management.js'); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadPatches, { once:true }); else loadPatches();
 })();
