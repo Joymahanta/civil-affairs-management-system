@@ -21,9 +21,6 @@ async function sendTextBeeSms(recipient, message) {
   const apiKey = String(process.env.TEXTBEE_API_KEY || '').trim();
   if (!apiKey) throw new Error('TextBee API key is not configured.');
 
-  // TextBee accepts E.164 recipients and can automatically select the default
-  // or most recently active enabled Android gateway. Only pin a device when
-  // the deployment explicitly supplies one.
   const body = { recipients: [recipient], message };
   if (process.env.TEXTBEE_DEVICE_ID) body.deviceId = process.env.TEXTBEE_DEVICE_ID;
   if (process.env.TEXTBEE_SIM_SUBSCRIPTION_ID) {
@@ -187,13 +184,17 @@ function installComplaintSmsHooks() {
             if (complaint) payload = { ...payload, status: complaint.status, assigned_to: complaint.assigned_to };
             const result = originalJson(payload);
             if (complaint) {
-              setImmediate(async () => {
-                await notifyResident(complaint, 'registered', req.session?.user?.id);
-                if (complaint.assigned_to) {
-                  const staff = db.prepare('SELECT id,name,phone FROM staff WHERE lower(name)=lower(?) LIMIT 1').get(complaint.assigned_to);
-                  if (staff) await notifyAssignedStaff(complaint, staff, req.session?.user?.id);
-                }
-              }).catch(error => console.error('[sms] registration notification error:', error.message || error));
+              setImmediate(() => {
+                Promise.resolve()
+                  .then(async () => {
+                    await notifyResident(complaint, 'registered', req.session?.user?.id);
+                    if (complaint.assigned_to) {
+                      const staff = db.prepare('SELECT id,name,phone FROM staff WHERE lower(name)=lower(?) LIMIT 1').get(complaint.assigned_to);
+                      if (staff) await notifyAssignedStaff(complaint, staff, req.session?.user?.id);
+                    }
+                  })
+                  .catch(error => console.error('[sms] registration notification error:', error.message || error));
+              });
             }
             return result;
           }
@@ -240,27 +241,31 @@ function installComplaintSmsHooks() {
         res.json = function complaintUpdateJson(payload) {
           if (res.statusCode >= 200 && res.statusCode < 300 && previous) {
             const result = originalJson(payload);
-            setImmediate(async () => {
-              const after = db.prepare('SELECT * FROM complaints WHERE id=?').get(previous.id);
-              if (!after) return;
+            setImmediate(() => {
+              Promise.resolve()
+                .then(async () => {
+                  const after = db.prepare('SELECT * FROM complaints WHERE id=?').get(previous.id);
+                  if (!after) return;
 
-              const changes = [];
-              if (previous.status !== after.status) changes.push(`Status: ${previous.status || 'New'} → ${after.status || 'New'}.`);
-              if ((previous.assigned_to || '') !== (after.assigned_to || '')) changes.push(`Assignment: ${previous.assigned_to || 'Unassigned'} → ${after.assigned_to || 'Unassigned'}.`);
-              if (previous.priority !== after.priority) changes.push(`Priority: ${previous.priority || 'Medium'} → ${after.priority || 'Medium'}.`);
-              if (previous.category !== after.category) changes.push(`Category changed to ${after.category || 'Other'}.`);
-              if (previous.location !== after.location) changes.push(`Location changed to ${after.location || 'updated location'}.`);
-              if (previous.description !== after.description) changes.push('Complaint details were updated.');
+                  const changes = [];
+                  if (previous.status !== after.status) changes.push(`Status: ${previous.status || 'New'} → ${after.status || 'New'}.`);
+                  if ((previous.assigned_to || '') !== (after.assigned_to || '')) changes.push(`Assignment: ${previous.assigned_to || 'Unassigned'} → ${after.assigned_to || 'Unassigned'}.`);
+                  if (previous.priority !== after.priority) changes.push(`Priority: ${previous.priority || 'Medium'} → ${after.priority || 'Medium'}.`);
+                  if (previous.category !== after.category) changes.push(`Category changed to ${after.category || 'Other'}.`);
+                  if (previous.location !== after.location) changes.push(`Location changed to ${after.location || 'updated location'}.`);
+                  if (previous.description !== after.description) changes.push('Complaint details were updated.');
 
-              if (changes.length) {
-                await notifyResident(after, 'updated', req.session?.user?.id, changes);
-              }
+                  if (changes.length) {
+                    await notifyResident(after, 'updated', req.session?.user?.id, changes);
+                  }
 
-              if ((previous.assigned_to || '') !== (after.assigned_to || '') && after.assigned_to) {
-                const staff = db.prepare('SELECT id,name,phone FROM staff WHERE lower(name)=lower(?) LIMIT 1').get(after.assigned_to);
-                if (staff) await notifyAssignedStaff(after, staff, req.session?.user?.id);
-              }
-            }).catch(error => console.error('[sms] complaint update notification error:', error.message || error));
+                  if ((previous.assigned_to || '') !== (after.assigned_to || '') && after.assigned_to) {
+                    const staff = db.prepare('SELECT id,name,phone FROM staff WHERE lower(name)=lower(?) LIMIT 1').get(after.assigned_to);
+                    if (staff) await notifyAssignedStaff(after, staff, req.session?.user?.id);
+                  }
+                })
+                .catch(error => console.error('[sms] complaint update notification error:', error.message || error));
+            });
             return result;
           }
           return originalJson(payload);
