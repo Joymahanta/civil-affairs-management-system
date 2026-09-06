@@ -1,0 +1,107 @@
+/* UI refinements: resident portal + workforce SMS picker */
+
+/* Resident portal hero: let the township photo read through the tint. */
+.resident-hero{
+  background:
+    linear-gradient(105deg,rgba(8,55,42,.70),rgba(17,105,79,.46) 58%,rgba(32,130,98,.38)),
+    url('/assets/stps-plant.jpg') center 42%/cover no-repeat;
+  isolation:isolate;
+}
+.resident-hero:before,
+.resident-hero:after{z-index:-1}
+.hero-inner{z-index:2}
+.resident-hero h1{text-shadow:0 2px 14px rgba(0,0,0,.18)}
+.resident-hero p{text-shadow:0 1px 8px rgba(0,0,0,.14)}
+
+/* Make the issue cards feel like actual action tiles. */
+.report-grid{gap:18px}
+.report-tile{
+  min-height:190px;
+  padding:24px 21px;
+  border-radius:14px;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-start;
+}
+.report-icon{
+  width:56px;
+  height:56px;
+  flex:none;
+  margin-bottom:17px;
+  border-radius:15px;
+  font-size:29px;
+  line-height:1;
+  box-shadow:inset 0 0 0 1px rgba(20,122,93,.08);
+}
+.report-tile h3{font-size:15px}
+.report-tile p{font-size:12px;line-height:1.5}
+.quick-action{padding:22px 19px}
+.quick-icon{font-size:27px;line-height:1}
+
+/* Workforce SMS recipient picker. */
+#sms-form .sms-recipient-picker{margin-bottom:17px}
+#sms-form .sms-recipient-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:8px;
+}
+#sms-form .sms-recipient-header label{margin:0}
+#sms-form .sms-select-all-row{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start !important;
+  gap:9px;
+  margin:0 0 9px;
+  padding:9px 11px;
+  border:1px solid #dce8e2;
+  border-radius:9px;
+  background:#f7fbf9;
+  color:var(--ink);
+}
+#sms-form .sms-select-all-row input,
+#sms-form .sms-recipient-row input{
+  width:17px;
+  height:17px;
+  flex:0 0 17px;
+  margin:0;
+  accent-color:var(--brand);
+}
+#sms-form .sms-recipient-list{
+  display:grid;
+  gap:6px;
+  max-height:205px;
+  overflow:auto;
+  padding:4px;
+  border:1px solid #e1e9e5;
+  border-radius:10px;
+  background:#fbfdfc;
+}
+#sms-form .sms-recipient-row{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start !important;
+  gap:10px;
+  margin:0;
+  padding:10px 11px;
+  border:1px solid transparent;
+  border-radius:8px;
+  background:#fff;
+  cursor:pointer;
+}
+#sms-form .sms-recipient-row:hover{border-color:#cce5da;background:#f4faf7}
+#sms-form .sms-recipient-row span{min-width:0;line-height:1.35;font-size:11px}
+#sms-form .sms-recipient-row b{font-size:12px}
+#sms-form .sms-recipient-count{display:block;margin-top:7px;font-size:10px}
+#sms-form .error{margin-bottom:8px}
+
+@media (max-width:760px){
+  .report-grid{grid-template-columns:repeat(2,1fr)}
+  .report-tile{min-height:170px}
+  .resident-hero{background-position:center}
+}
+@media (max-width:480px){
+  .report-grid{grid-template-columns:1fr}
+  .report-tile{min-height:0}
+}
