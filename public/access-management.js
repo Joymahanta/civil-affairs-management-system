@@ -53,7 +53,9 @@
     $('#designation-form').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget, data = Object.fromEntries(new FormData(f)); err(f); try { await api(data.id ? `/api/designations/${data.id}` : '/api/designations', { method: data.id ? 'PATCH' : 'POST', body: JSON.stringify(data) }); modal('designation-form-modal', false); await loadDesignations(); renderDesignations(); toast('Designation saved.') } catch (x) { err(f, x.message) } };
     if (session.user.role === 'Administrator') { $('#open-user-modal').onclick = () => openUser(); $('#user-form').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget, data = Object.fromEntries(new FormData(f)); err(f); try { await api(data.id ? `/api/users/${data.id}` : '/api/users', { method: data.id ? 'PATCH' : 'POST', body: JSON.stringify(data) }); modal('user-modal', false); await loadUsers(); toast('User saved.') } catch (x) { err(f, x.message) }; }; await loadUsers() } else $('#users-card').innerHTML = '<div class="card-head"><h2>Users & access</h2></div><p class="sub">Only an Administrator can manage user accounts and account roles.</p>';
     const loadQr = () => { if (!document.querySelector('script[src^="/qr-management.js"]')) { const s = document.createElement('script'); s.src = '/qr-management.js?v=admin-direct-1'; s.defer = true; document.head.appendChild(s); } };
+    const loadQrUiFix = () => { if (!document.querySelector('script[src^="/qr-scanner-ui-fix.js"]')) { const s = document.createElement('script'); s.src = '/qr-scanner-ui-fix.js?v=1'; s.defer = true; document.head.appendChild(s); } };
     loadQr();
+    loadQrUiFix();
   }
   boot().catch(e => toast(e.message));
 })();
