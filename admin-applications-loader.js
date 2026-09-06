@@ -1,0 +1,4 @@
+const express=require('express');
+function inject(body){if(typeof body!=='string'||!body.includes('<html'))return body;if(body.includes('/township-applications-admin.js'))return body;return body.replace('</body>','<script src="/township-applications-admin.js?v=1" defer></script></body>');}
+const originalSend=express.response.send;express.response.send=function(body){const req=this.req;if(req&&req.path==='/admin.html')body=inject(body);return originalSend.call(this,body)};
+const originalSendFile=express.response.sendFile;express.response.sendFile=function(filePath,options,callback){const req=this.req;if(!(req&&req.path==='/admin.html'))return originalSendFile.call(this,filePath,options,callback);const cb=typeof options==='function'?options:callback;require('fs').readFile(filePath,'utf8',(err,body)=>{if(err){if(cb)cb(err);else this.status(500).end();return}this.type('html');originalSend.call(this,inject(body));if(cb)cb()});return this};
