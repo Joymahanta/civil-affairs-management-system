@@ -68,12 +68,10 @@ function installQrRoutes(app) {
 
       const db = getDb();
       let code = makeCode(type);
-      while (!(await db.collection('township_qr').where('code', '==', code).limit(1).get())).code = makeCode(type);
-      const existing = await db.collection('township_qr').where('code', '==', code).limit(1).get();
-      while (!existing.empty) {
+      while (true) {
+        const existing = await db.collection('township_qr').where('code', '==', code).limit(1).get();
+        if (existing.empty) break;
         code = makeCode(type);
-        const retry = await db.collection('township_qr').where('code', '==', code).limit(1).get();
-        if (retry.empty) break;
       }
       const idSnapshot = await db.collection('township_qr').orderBy('id', 'desc').limit(1).get();
       const id = idSnapshot.empty ? 1 : Number(idSnapshot.docs[0].get('id')) + 1;
@@ -126,8 +124,8 @@ function installQrRoutes(app) {
   router.get('/api/qr/resolve/:code', async (req, res) => {
     try {
       const code = String(req.params.code || '').trim().toUpperCase();
-      const snapshot = await getDb().collection('township_qr').where('code', '==', code).where('active', '==', 1).limit(1).get();
-      if (snapshot.empty) return res.status(404).json({ error: 'This township QR code is not registered or is inactive.' });
+      const snapshot = await getDb().collection('township_qr').where('code', '==', code).limit(1).get();
+      if (snapshot.empty || Number(snapshot.docs[0].get('active')) !== 1) return res.status(404).json({ error: 'This township QR code is not registered or is inactive.' });
       const data = snapshot.docs[0].data();
       res.json({ id: Number(data.id ?? snapshot.docs[0].id), code: data.code, type: data.type, title: data.title, data: data.data || {}, url: publicQrUrl(req, data.code, data.type, data.data || {}, data.title) });
     } catch (error) {
@@ -139,8 +137,8 @@ function installQrRoutes(app) {
   router.get('/qr/:code', async (req, res) => {
     try {
       const code = String(req.params.code || '').trim().toUpperCase();
-      const snapshot = await getDb().collection('township_qr').where('code', '==', code).where('active', '==', 1).limit(1).get();
-      if (snapshot.empty) return res.status(404).send('<h1>QR code not found</h1><p>This township QR code is not registered.</p>');
+      const snapshot = await getDb().collection('township_qr').where('code', '==', code).limit(1).get();
+      if (snapshot.empty || Number(snapshot.docs[0].get('active')) !== 1) return res.status(404).send('<h1>QR code not found</h1><p>This township QR code is not registered.</p>');
       const data = snapshot.docs[0].data();
       res.redirect(302, publicQrUrl(req, data.code, data.type, data.data || {}, data.title));
     } catch (error) {
