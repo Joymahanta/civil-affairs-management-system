@@ -81,9 +81,6 @@ async function removeTestData() {
     }
   }
 
-  // Do not hide the test result because Windows can briefly retain a native
-  // SQLite handle after the child process exits. Leave the temp directory for
-  // Windows to release and clean it up later.
   console.warn(`Could not immediately remove test data: ${testData}`);
 }
 
@@ -118,11 +115,16 @@ async function removeTestData() {
     check(r, 200, 'List designations');
     assert(r.body.length >= 10);
 
+    r = await request('/api/departments');
+    check(r, 200, 'List departments');
+    assert(r.body.length >= 1);
+    const department = r.body[0];
+
     r = await request('/api/designations', {
       method: 'POST',
       body: JSON.stringify({
         name: 'Test Coordinator',
-        department: 'Testing',
+        departmentId: department.id,
         description: 'Test only'
       })
     });
@@ -134,7 +136,7 @@ async function removeTestData() {
       body: JSON.stringify({
         name: 'Test Staff',
         designationId: designation.id,
-        department: 'Testing',
+        department: department.name,
         phone: '9876509999',
         attendance: 'Present',
         currentTask: 'Verify workflow',
