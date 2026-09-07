@@ -9,6 +9,7 @@
     "test": "node tests/api-test.js"
   },
   "dependencies": {
+    "@dataconnect/admin-generated": "file:src/dataconnect-admin-generated",
     "@dataconnect/generated": "file:src/dataconnect-generated",
     "better-sqlite3": "^11.8.1",
     "better-sqlite3-session-store": "^0.1.0",
