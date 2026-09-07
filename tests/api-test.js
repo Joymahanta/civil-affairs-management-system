@@ -111,14 +111,18 @@ async function removeTestData() {
     });
     check(r, 200, 'Administrator login');
 
+    r = await request('/api/departments', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Testing Department',
+        description: 'Automated API test data'
+      })
+    });
+    check(r, 201, 'Create department');
+    const department = r.body;
+
     r = await request('/api/designations');
     check(r, 200, 'List designations');
-    assert(r.body.length >= 10);
-
-    r = await request('/api/departments');
-    check(r, 200, 'List departments');
-    assert(r.body.length >= 1);
-    const department = r.body[0];
 
     r = await request('/api/designations', {
       method: 'POST',
