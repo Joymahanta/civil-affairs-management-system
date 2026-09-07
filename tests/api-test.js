@@ -1,11 +1,207 @@
 const { spawn } = require('child_process');
-const fs = require('fs'); const path = require('path'); const os = require('os'); const assert = require('assert');
-const port = 3127, base = `http://127.0.0.1:${port}`, adminPassword = 'TestOnlySecurePassword!';
-const testData = fs.mkdtempSync(path.join(os.tmpdir(), 'civil-affairs-test-')); let cookie = '';
-async function request(url, options={}) { const headers={...(options.headers||{})};if(cookie)headers.Cookie=cookie;if(options.body&&!headers['Content-Type'])headers['Content-Type']='application/json';const response=await fetch(base+url,{...options,headers,redirect:'manual'});const set=response.headers.get('set-cookie');if(set)cookie=set.split(';')[0];return {response,body:await response.json().catch(()=>({}))}; }
-const check=(r,status,label)=>assert.equal(r.response.status,status,`${label}: ${JSON.stringify(r.body)}`);
-async function ready(){for(let i=0;i<40;i++){try{if((await fetch(base+'/api/health')).ok)return}catch{}await new Promise(r=>setTimeout(r,125))}throw Error('Server did not start');}
-(async()=>{const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:String(port),DATA_DIR:testData,INITIAL_ADMIN_PASSWORD:adminPassword,SESSION_SECRET:'test-session-secret'},stdio:'ignore'});try{await ready();let r=await request('/api/summary');check(r,401,'Unauthenticated operations blocked');r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'admin@civilaffairs.local',password:adminPassword})});check(r,200,'Administrator login');
-r=await request('/api/designations');check(r,200,'List designations');assert(r.body.length>=10);r=await request('/api/designations',{method:'POST',body:JSON.stringify({name:'Test Coordinator',description:'Test only'})});check(r,201,'Create designation');const designation=r.body;r=await request('/api/staff',{method:'POST',body:JSON.stringify({name:'Test Staff',designationId:designation.id,department:'Testing',phone:'9876509999',attendance:'Present',currentTask:'Verify workflow',email:'staff@test.local'})});check(r,201,'Create staff');const staff=r.body;r=await request('/api/staff');check(r,200,'List staff');assert(r.body.some(x=>x.id===staff.id));r=await request('/api/staff/'+staff.id,{method:'PATCH',body:JSON.stringify({attendance:'Absent',currentTask:'Updated test task'})});check(r,200,'Update staff');
-r=await request('/api/users',{method:'POST',body:JSON.stringify({name:'Test Subadmin',email:'subadmin@test.local',password:'SubadminTestPassword!',role:'Sub-administrator',staffId:staff.id})});check(r,201,'Create Sub-administrator');const sub=r.body;assert.equal(sub.password_hash,undefined);cookie='';r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'subadmin@test.local',password:'SubadminTestPassword!'})});check(r,200,'Sub-administrator login');assert.equal(r.body.user.role,'Sub-administrator');r=await request('/admin.html');assert.equal(r.response.status,200,'Sub-administrator admin page');for(const endpoint of ['/api/summary','/api/complaints','/api/staff','/api/equipment','/api/tenders']){r=await request(endpoint);check(r,200,`Sub-administrator ${endpoint}`)}r=await request('/api/users');check(r,403,'Sub-administrator user access blocked');r=await request('/api/users/'+sub.id,{method:'PATCH',body:JSON.stringify({role:'Administrator'})});check(r,403,'Sub-administrator role change blocked');
-cookie='';r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({email:'admin@civilaffairs.local',password:adminPassword})});check(r,200,'Administrator re-login');r=await request('/api/users');check(r,200,'Administrator user management');r=await request('/api/users/1',{method:'PATCH',body:JSON.stringify({role:'Sub-administrator'})});check(r,403,'Last Administrator protection');r=await request('/api/users/1',{method:'DELETE'});check(r,403,'Last Administrator deletion protection');r=await request('/api/designations/'+designation.id,{method:'DELETE'});check(r,409,'Assigned designation deletion protection');console.log('API workflow tests passed.');}finally{server.kill();fs.rmSync(testData,{recursive:true,force:true)}})().catch(e=>{console.error(e.stack||e);process.exitCode=1});
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const assert = require('assert');
+
+const port = 3127;
+const base = `http://127.0.0.1:${port}`;
+const adminPassword = 'TestOnlySecurePassword!';
+const testData = fs.mkdtempSync(path.join(os.tmpdir(), 'civil-affairs-test-'));
+let cookie = '';
+
+async function request(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (cookie) headers.Cookie = cookie;
+  if (options.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const response = await fetch(base + url, {
+    ...options,
+    headers,
+    redirect: 'manual'
+  });
+
+  const set = response.headers.get('set-cookie');
+  if (set) cookie = set.split(';')[0];
+
+  return {
+    response,
+    body: await response.json().catch(() => ({}))
+  };
+}
+
+const check = (result, status, label) => {
+  assert.equal(
+    result.response.status,
+    status,
+    `${label}: ${JSON.stringify(result.body)}`
+  );
+};
+
+async function ready() {
+  for (let i = 0; i < 40; i++) {
+    try {
+      if ((await fetch(base + '/api/health')).ok) return;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 125));
+  }
+  throw Error('Server did not start');
+}
+
+(async () => {
+  const server = spawn(process.execPath, ['server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATA_DIR: testData,
+      INITIAL_ADMIN_PASSWORD: adminPassword,
+      SESSION_SECRET: 'test-session-secret'
+    },
+    stdio: 'ignore'
+  });
+
+  try {
+    await ready();
+
+    let r = await request('/api/summary');
+    check(r, 401, 'Unauthenticated operations blocked');
+
+    r = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'admin@civilaffairs.local',
+        password: adminPassword
+      })
+    });
+    check(r, 200, 'Administrator login');
+
+    r = await request('/api/designations');
+    check(r, 200, 'List designations');
+    assert(r.body.length >= 10);
+
+    r = await request('/api/designations', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Test Coordinator',
+        description: 'Test only'
+      })
+    });
+    check(r, 201, 'Create designation');
+    const designation = r.body;
+
+    r = await request('/api/staff', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Test Staff',
+        designationId: designation.id,
+        department: 'Testing',
+        phone: '9876509999',
+        attendance: 'Present',
+        currentTask: 'Verify workflow',
+        email: 'staff@test.local'
+      })
+    });
+    check(r, 201, 'Create staff');
+    const staff = r.body;
+
+    r = await request('/api/staff');
+    check(r, 200, 'List staff');
+    assert(r.body.some(x => x.id === staff.id));
+
+    r = await request('/api/staff/' + staff.id, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        attendance: 'Absent',
+        currentTask: 'Updated test task'
+      })
+    });
+    check(r, 200, 'Update staff');
+
+    r = await request('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Test Subadmin',
+        email: 'subadmin@test.local',
+        password: 'SubadminTestPassword!',
+        role: 'Sub-administrator',
+        staffId: staff.id
+      })
+    });
+    check(r, 201, 'Create Sub-administrator');
+    const sub = r.body;
+    assert.equal(sub.password_hash, undefined);
+
+    cookie = '';
+    r = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'subadmin@test.local',
+        password: 'SubadminTestPassword!'
+      })
+    });
+    check(r, 200, 'Sub-administrator login');
+    assert.equal(r.body.user.role, 'Sub-administrator');
+
+    r = await request('/admin.html');
+    assert.equal(r.response.status, 200, 'Sub-administrator admin page');
+
+    for (const endpoint of [
+      '/api/summary',
+      '/api/complaints',
+      '/api/staff',
+      '/api/equipment',
+      '/api/tenders'
+    ]) {
+      r = await request(endpoint);
+      check(r, 200, `Sub-administrator ${endpoint}`);
+    }
+
+    r = await request('/api/users');
+    check(r, 403, 'Sub-administrator user access blocked');
+
+    r = await request('/api/users/' + sub.id, {
+      method: 'PATCH',
+      body: JSON.stringify({ role: 'Administrator' })
+    });
+    check(r, 403, 'Sub-administrator role change blocked');
+
+    cookie = '';
+    r = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'admin@civilaffairs.local',
+        password: adminPassword
+      })
+    });
+    check(r, 200, 'Administrator re-login');
+
+    r = await request('/api/users');
+    check(r, 200, 'Administrator user management');
+
+    r = await request('/api/users/1', {
+      method: 'PATCH',
+      body: JSON.stringify({ role: 'Sub-administrator' })
+    });
+    check(r, 403, 'Last Administrator protection');
+
+    r = await request('/api/users/1', {
+      method: 'DELETE'
+    });
+    check(r, 403, 'Last Administrator deletion protection');
+
+    r = await request('/api/designations/' + designation.id, {
+      method: 'DELETE'
+    });
+    check(r, 409, 'Assigned designation deletion protection');
+
+    console.log('API workflow tests passed.');
+  } finally {
+    server.kill();
+    fs.rmSync(testData, { recursive: true, force: true });
+  }
+})().catch(error => {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});
