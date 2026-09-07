@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Township civil administration and resident service portal",
   "main": "server.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js session-store-patch.js",
     "dev": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js --watch session-store-patch.js",
+    "build": "node -e \"console.log('CAMS Firebase App Hosting build ready')\"",
     "test": "node tests/api-test.js"
   },
   "dependencies": {

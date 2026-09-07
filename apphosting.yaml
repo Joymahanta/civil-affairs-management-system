@@ -1,0 +1,14 @@
+# Firebase App Hosting configuration for CAMS.
+# The Express application remains the server entry point while Firestore,
+# Firebase Authentication and FCM are introduced incrementally.
+
+scripts:
+  buildCommand: npm run build
+  runCommand: npm start
+
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
