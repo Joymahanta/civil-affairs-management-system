@@ -20,8 +20,13 @@ async function nextNumericId(collectionName) {
   return Number.isFinite(value) ? value + 1 : 1;
 }
 
-function isDuplicate(error) {
-  return error && (error.code === 6 || error.code === 'already-exists');
+async function findNameMatch(collectionName, name, excludeId = null) {
+  const wanted = String(name || '').trim().toLowerCase();
+  const snapshot = await getDb().collection(collectionName).get();
+  return snapshot.docs.find(doc => {
+    if (excludeId !== null && doc.id === String(excludeId)) return false;
+    return String(doc.get('name') || '').trim().toLowerCase() === wanted;
+  }) || null;
 }
 
 function installWorkforceRoutes(app) {
@@ -42,11 +47,7 @@ function installWorkforceRoutes(app) {
       const rows = departmentSnapshot.docs.map(doc => {
         const data = doc.data();
         const id = Number(data.id ?? doc.id);
-        return {
-          ...data,
-          id,
-          designation_count: counts.get(id) || 0
-        };
+        return { ...data, id, designation_count: counts.get(id) || 0 };
       });
       rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
       res.json(rows);
@@ -61,11 +62,8 @@ function installWorkforceRoutes(app) {
       const name = String(req.body?.name || '').trim();
       const description = String(req.body?.description || '').trim();
       if (!name) return res.status(400).json({ error: 'Department name is required.' });
-
       const db = getDb();
-      const existing = await db.collection('departments').where('name_lower', '==', name.toLowerCase()).limit(1).get();
-      if (!existing.empty) return res.status(409).json({ error: 'A department with this name already exists.' });
-
+      if (await findNameMatch('departments', name)) return res.status(409).json({ error: 'A department with this name already exists.' });
       const id = await nextNumericId('departments');
       const createdAt = stamp();
       const row = { id, name, description, name_lower: name.toLowerCase(), created_at: createdAt, updated_at: createdAt };
@@ -85,13 +83,11 @@ function installWorkforceRoutes(app) {
       const ref = db.collection('departments').doc(String(id));
       const current = await ref.get();
       if (!current.exists) return res.status(404).json({ error: 'Department not found.' });
-
       const updates = {};
       if (req.body?.name !== undefined) {
         const name = String(req.body.name || '').trim();
         if (!name) return res.status(400).json({ error: 'Department name is required.' });
-        const duplicate = await db.collection('departments').where('name_lower', '==', name.toLowerCase()).limit(2).get();
-        if (duplicate.docs.some(doc => doc.id !== String(id))) return res.status(409).json({ error: 'A department with this name already exists.' });
+        if (await findNameMatch('departments', name, id)) return res.status(409).json({ error: 'A department with this name already exists.' });
         updates.name = name;
         updates.name_lower = name.toLowerCase();
       }
@@ -159,29 +155,14 @@ function installWorkforceRoutes(app) {
       const name = String(req.body?.name || '').trim();
       const description = String(req.body?.description || '').trim();
       const departmentId = Number(req.body?.departmentId);
-      if (!name || !Number.isInteger(departmentId) || departmentId < 1) {
-        return res.status(400).json({ error: 'Designation name and department are required.' });
-      }
-
+      if (!name || !Number.isInteger(departmentId) || departmentId < 1) return res.status(400).json({ error: 'Designation name and department are required.' });
       const db = getDb();
-      const departmentRef = db.collection('departments').doc(String(departmentId));
-      const department = await departmentRef.get();
+      const department = await db.collection('departments').doc(String(departmentId)).get();
       if (!department.exists) return res.status(400).json({ error: 'Selected department does not exist.' });
-
-      const existing = await db.collection('designations').where('name_lower', '==', name.toLowerCase()).limit(1).get();
-      if (!existing.empty) return res.status(409).json({ error: 'A designation with this name already exists.' });
-
+      if (await findNameMatch('designations', name)) return res.status(409).json({ error: 'A designation with this name already exists.' });
       const id = await nextNumericId('designations');
       const createdAt = stamp();
-      const row = {
-        id,
-        name,
-        description,
-        department_id: departmentId,
-        name_lower: name.toLowerCase(),
-        created_at: createdAt,
-        updated_at: createdAt
-      };
+      const row = { id, name, description, department_id: departmentId, name_lower: name.toLowerCase(), created_at: createdAt, updated_at: createdAt };
       await db.collection('designations').doc(String(id)).set(row);
       res.status(201).json(row);
     } catch (error) {
@@ -198,13 +179,11 @@ function installWorkforceRoutes(app) {
       const ref = db.collection('designations').doc(String(id));
       const current = await ref.get();
       if (!current.exists) return res.status(404).json({ error: 'Designation not found.' });
-
       const updates = {};
       if (req.body?.name !== undefined) {
         const name = String(req.body.name || '').trim();
         if (!name) return res.status(400).json({ error: 'Designation name is required.' });
-        const duplicate = await db.collection('designations').where('name_lower', '==', name.toLowerCase()).limit(2).get();
-        if (duplicate.docs.some(doc => doc.id !== String(id))) return res.status(409).json({ error: 'A designation with this name already exists.' });
+        if (await findNameMatch('designations', name, id)) return res.status(409).json({ error: 'A designation with this name already exists.' });
         updates.name = name;
         updates.name_lower = name.toLowerCase();
       }
