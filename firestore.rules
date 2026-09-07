@@ -1,0 +1,12 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // CAMS currently uses the Express backend as the trusted server layer.
+    // Keep direct browser access disabled until Firebase Authentication and
+    // collection-level authorization are implemented and tested.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
