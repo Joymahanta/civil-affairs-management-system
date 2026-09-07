@@ -9,10 +9,12 @@
     "test": "node tests/api-test.js"
   },
   "dependencies": {
+    "@dataconnect/generated": "file:src/dataconnect-generated",
     "better-sqlite3": "^11.8.1",
     "better-sqlite3-session-store": "^0.1.0",
     "express": "^4.21.2",
     "express-session": "^1.19.0",
+    "firebase": "^12.18.0",
     "helmet": "^8.0.0"
   }
 }
