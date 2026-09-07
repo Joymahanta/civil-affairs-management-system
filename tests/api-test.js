@@ -50,6 +50,43 @@ async function ready() {
   throw Error('Server did not start');
 }
 
+async function stopServer(server) {
+  if (!server || server.exitCode !== null) return;
+
+  const exited = new Promise(resolve => {
+    server.once('exit', resolve);
+  });
+
+  server.kill();
+
+  await Promise.race([
+    exited,
+    new Promise(resolve => setTimeout(resolve, 3000))
+  ]);
+
+  if (server.exitCode === null) {
+    try { server.kill(); } catch {}
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
+async function removeTestData() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      fs.rmSync(testData, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (error.code !== 'EBUSY' && error.code !== 'EPERM') throw error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+
+  // Do not hide the test result because Windows can briefly retain a native
+  // SQLite handle after the child process exits. Leave the temp directory for
+  // Windows to release and clean it up later.
+  console.warn(`Could not immediately remove test data: ${testData}`);
+}
+
 (async () => {
   const server = spawn(process.execPath, ['server.js'], {
     env: {
@@ -199,8 +236,8 @@ async function ready() {
 
     console.log('API workflow tests passed.');
   } finally {
-    server.kill();
-    fs.rmSync(testData, { recursive: true, force: true });
+    await stopServer(server);
+    await removeTestData();
   }
 })().catch(error => {
   console.error(error.stack || error);
