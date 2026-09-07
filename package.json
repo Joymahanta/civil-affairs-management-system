@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js session-store-patch.js",
     "dev": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js --watch session-store-patch.js",
-    "build": "node -e \"console.log('CAMS Firebase App Hosting build ready')\"",
+    "firestore:migrate": "node scripts/migrate-sqlite-to-firestore.js",
     "test": "node tests/api-test.js"
   },
   "dependencies": {
