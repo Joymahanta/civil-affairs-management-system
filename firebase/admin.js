@@ -1,3 +1,5 @@
+require('dotenv').config({ quiet: true });
+
 const { getApps, initializeApp, applicationDefault, cert } = require('firebase-admin/app');
 
 function serviceAccountFromEnv() {
