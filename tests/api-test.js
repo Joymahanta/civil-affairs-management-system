@@ -50,6 +50,20 @@ async function ready() {
   throw Error('Server did not start');
 }
 
+async function stopServer(server) {
+  if (!server || server.exitCode !== null || server.signalCode) return;
+
+  server.kill();
+
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, 5000);
+    server.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 (async () => {
   const server = spawn(process.execPath, ['server.js'], {
     env: {
@@ -198,8 +212,13 @@ async function ready() {
 
     console.log('API workflow tests passed.');
   } finally {
-    server.kill();
-    fs.rmSync(testData, { recursive: true, force: true });
+    await stopServer(server);
+    fs.rmSync(testData, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100
+    });
   }
 })().catch(error => {
   console.error(error.stack || error);
