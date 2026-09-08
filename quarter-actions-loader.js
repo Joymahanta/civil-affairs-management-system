@@ -1,0 +1,4 @@
+const express=require('express');
+function inject(body){if(typeof body!=='string'||!body.includes('/cams-current-ui-fixes.js')||body.includes('/quarter-application-actions.js'))return body;return body.replace('</body>','<script src="/quarter-application-actions.js?v=1" defer></script></body>');}
+const send=express.response.send;express.response.send=function(body){const req=this.req;if(req&&req.path==='/admin.html')body=inject(body);return send.call(this,body)};
+const sendFile=express.response.sendFile;express.response.sendFile=function(filePath,options,callback){const req=this.req;if(!(req&&req.path==='/admin.html'))return sendFile.call(this,filePath,options,callback);const cb=typeof options==='function'?options:callback;require('fs').readFile(filePath,'utf8',(err,body)=>{if(err){if(cb)cb(err);else this.status(500).end();return;}this.type('html');send.call(this,inject(body));if(cb)cb();});return this};
