@@ -1,0 +1,1 @@
+(()=>{const native=window.setTimeout.bind(window);window.setTimeout=(fn,delay,...args)=>{const source=typeof fn==='function'?Function.prototype.toString.call(fn):String(fn);if(source.includes('location.reload'))return native(()=>{},delay);return native(fn,delay,...args);};})();
