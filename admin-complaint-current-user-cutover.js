@@ -4,73 +4,14 @@ const fs = require('fs');
 
 const isAdmin = req => ['Administrator', 'Sub-administrator'].includes(req.session?.user?.role);
 const isResident = req => req.session?.user?.role === 'Resident';
-
-async function rows(name) {
-  const snap = await getDb().collection(name).get();
-  return snap.docs.map(doc => ({ ...doc.data(), id: Number(doc.get('id') ?? doc.id) }));
-}
-
-async function currentAdmin(req) {
-  if (!isAdmin(req)) return null;
-  const user = req.session.user;
-  const staff = (await rows('staff')).find(row => Number(row.user_id) === Number(user.id))
-    || (await rows('staff')).find(row => String(row.email || '').trim().toLowerCase() === String(user.email || '').trim().toLowerCase());
-  return { user_id: user.id, role: user.role, name: staff?.name || user.name || '', phone: staff?.phone || user.phone || '', email: staff?.email || user.email || '', staff_id: staff?.id ?? null, employee_id: staff?.employee_id || staff?.employeeId || (staff ? `STPS-EMP-${String(staff.id).padStart(3, '0')}` : '') };
-}
-
-async function currentResident(req) {
-  if (!isResident(req)) return null;
-  const wanted = Number(req.session.user.staffId ?? req.session.user.id);
-  const staff = (await rows('staff')).find(row => Number(row.id) === wanted)
-    || (await rows('staff')).find(row => String(row.phone || '').replace(/\D/g, '') === String(req.session.user.phone || '').replace(/\D/g, ''))
-    || (await rows('staff')).find(row => String(row.email || '').toLowerCase() === String(req.session.user.email || '').toLowerCase());
-  return staff ? { staff_id: staff.id, employee_id: staff.employee_id || staff.employeeId || `STPS-EMP-${String(staff.id).padStart(3, '0')}`, name: staff.name || '', phone: staff.phone || '', email: staff.email || '', department: staff.department || '', designation: staff.designation || '' } : null;
-}
-
+async function rows(name) { const snap = await getDb().collection(name).get(); return snap.docs.map(doc => ({ ...doc.data(), id: Number(doc.get('id') ?? doc.id) })); }
+async function currentAdmin(req) { if (!isAdmin(req)) return null; const user = req.session.user; const staff = (await rows('staff')).find(row => Number(row.user_id) === Number(user.id)) || (await rows('staff')).find(row => String(row.email || '').trim().toLowerCase() === String(user.email || '').trim().toLowerCase()); return { user_id:user.id, role:user.role, name:staff?.name||user.name||'', phone:staff?.phone||user.phone||'', email:staff?.email||user.email||'', staff_id:staff?.id??null, employee_id:staff?.employee_id||staff?.employeeId||(staff?`STPS-EMP-${String(staff.id).padStart(3,'0')}`:'') }; }
+async function currentResident(req) { if (!isResident(req)) return null; const wanted=Number(req.session.user.staffId??req.session.user.id); const staff=(await rows('staff')).find(row=>Number(row.id)===wanted)||(await rows('staff')).find(row=>String(row.phone||'').replace(/\D/g,'')===String(req.session.user.phone||'').replace(/\D/g,''))||(await rows('staff')).find(row=>String(row.email||'').toLowerCase()===String(req.session.user.email||'').toLowerCase()); return staff?{staff_id:staff.id,employee_id:staff.employee_id||staff.employeeId||`STPS-EMP-${String(staff.id).padStart(3,'0')}`,name:staff.name||'',phone:staff.phone||'',email:staff.email||'',department:staff.department||'',designation:staff.designation||''}:null; }
 function install(app) {
-  app.get('/api/admin/current-user', async (req, res) => {
-    try { const user = await currentAdmin(req); if (!user) return res.status(401).json({ error: 'Please sign in to the Civil Office console.' }); res.json(user); }
-    catch (e) { console.error('[admin current user]', e); res.status(500).json({ error: 'Could not load the current signed-in user.' }); }
-  });
-
-  // Identity is resolved per HTTP session. Multiple administrators can therefore use
-  // the application simultaneously without sharing a global current-user value.
-  app.use('/api/complaints', async (req, res, next) => {
-    if (req.method !== 'POST' || (!isAdmin(req) && !isResident(req))) return next();
-    try {
-      if (isAdmin(req)) {
-        const user = await currentAdmin(req);
-        if (!user) return res.status(401).json({ error: 'Please sign in to the Civil Office console.' });
-        req.body = { ...(req.body || {}), reporterName: user.name, reporterPhone: user.phone, reporterEmail: user.email, reporter_user_id: user.user_id, reporter_role: user.role, reporter_staff_id: user.staff_id, reporter_employee_id: user.employee_id };
-      } else {
-        const staff = await currentResident(req);
-        if (!staff) return res.status(401).json({ error: 'Your Workforce record could not be found. Please sign in again.' });
-        req.body = { ...(req.body || {}), reporterName: staff.name, reporterPhone: staff.phone, reporterEmail: staff.email, reporter_staff_id: staff.staff_id, reporter_employee_id: staff.employee_id, reporter_department: staff.department, reporter_designation: staff.designation };
-      }
-      next();
-    } catch (e) { console.error('[complaint identity]', e); res.status(500).json({ error: 'Could not resolve the signed-in user identity.' }); }
-  });
-
-  const inject = body => {
-    if (typeof body !== 'string') return body;
-    if (!body.includes('/admin-complaint-current-user.js')) body = body.replace('</body>', '<script src="/admin-complaint-current-user.js?v=2"></script></body>');
-    if (!body.includes('/cams-complete-admin.js')) body = body.replace('</body>', '<script src="/cams-complete-admin.js?v=1"></script></body>');
-    return body;
-  };
-  const originalSend = express.response.send;
-  express.response.send = function(body) { if (this.req?.path === '/admin.html') body = inject(body); return originalSend.call(this, body); };
-  const originalSendFile = express.response.sendFile;
-  express.response.sendFile = function(filePath, options, callback) {
-    const req = this.req;
-    if (!(req?.path === '/admin.html' && typeof filePath === 'string' && /(?:^|[\\/])admin\.html$/.test(filePath))) return originalSendFile.call(this, filePath, options, callback);
-    const cb = typeof options === 'function' ? options : callback;
-    fs.readFile(filePath, 'utf8', (error, body) => {
-      if (error) { if (typeof cb === 'function') cb(error); else this.status(500).end(); return; }
-      this.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'); this.type('html'); originalSend.call(this, inject(body)); if (typeof cb === 'function') cb();
-    });
-    return this;
-  };
+  app.get('/api/admin/current-user', async (req,res)=>{try{const user=await currentAdmin(req);if(!user)return res.status(401).json({error:'Please sign in to the Civil Office console.'});res.json(user);}catch(e){console.error('[admin current user]',e);res.status(500).json({error:'Could not load the current signed-in user.'});}});
+  app.use('/api/complaints', async (req,res,next)=>{if(req.method!=='POST'||(!isAdmin(req)&&!isResident(req)))return next();try{if(isAdmin(req)){const user=await currentAdmin(req);if(!user)return res.status(401).json({error:'Please sign in to the Civil Office console.'});req.body={...(req.body||{}),reporterName:user.name,reporterPhone:user.phone,reporterEmail:user.email,reporter_user_id:user.user_id,reporter_role:user.role,reporter_staff_id:user.staff_id,reporter_employee_id:user.employee_id};}else{const staff=await currentResident(req);if(!staff)return res.status(401).json({error:'Your Workforce record could not be found. Please sign in again.'});req.body={...(req.body||{}),reporterName:staff.name,reporterPhone:staff.phone,reporterEmail:staff.email,reporter_staff_id:staff.staff_id,reporter_employee_id:staff.employee_id,reporter_department:staff.department,reporter_designation:staff.designation};}next();}catch(e){console.error('[complaint identity]',e);res.status(500).json({error:'Could not resolve the signed-in user identity.'});}});
+  const inject=body=>{if(typeof body!=='string')return body;if(!body.includes('/admin-complaint-current-user.js'))body=body.replace('</body>','<script src="/admin-complaint-current-user.js?v=3"></script></body>');if(!body.includes('/cams-complete-admin.js'))body=body.replace('</body>','<script src="/cams-complete-admin.js?v=2"></script></body>');if(!body.includes('/cams-admin-update-fix.js'))body=body.replace('</body>','<script src="/cams-admin-update-fix.js?v=1"></script></body>');return body;};
+  const originalSend=express.response.send; express.response.send=function(body){if(this.req?.path==='/admin.html')body=inject(body);return originalSend.call(this,body);};
+  const originalSendFile=express.response.sendFile; express.response.sendFile=function(filePath,options,callback){const req=this.req;if(!(req?.path==='/admin.html'&&typeof filePath==='string'&&/(?:^|[\\/])admin\.html$/.test(filePath)))return originalSendFile.call(this,filePath,options,callback);const cb=typeof options==='function'?options:callback;fs.readFile(filePath,'utf8',(error,body)=>{if(error){if(typeof cb==='function')cb(error);else this.status(500).end();return;}this.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');this.type('html');originalSend.call(this,inject(body));if(typeof cb==='function')cb();});return this;};
 }
-
-const originalListen = express.application.listen;
-express.application.listen = function(...args) { try { install(this); } catch (e) { console.error('[admin complaint current user] install', e); } return originalListen.apply(this, args); };
+const originalListen=express.application.listen; express.application.listen=function(...args){try{install(this);}catch(e){console.error('[admin complaint current user] install',e);}return originalListen.apply(this,args);};
