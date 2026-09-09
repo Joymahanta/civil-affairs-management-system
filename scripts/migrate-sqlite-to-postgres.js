@@ -34,6 +34,18 @@ const migrationOrder = [
   'notification_history'
 ];
 
+const aliasMap = {
+  name: ['full_name', 'civilian_name', 'person_name', 'applicant_name', 'owner_name'],
+  phone: ['mobile', 'mobile_no', 'phone_number', 'contact_phone'],
+  email: ['email_address', 'mail'],
+  address: ['residential_address', 'home_address', 'full_address'],
+  shop_name: ['name', 'business_name'],
+  owner_name: ['owner', 'proprietor', 'proprietor_name'],
+  shop_code: ['code', 'shop_id', 'asset_code'],
+  location: ['address', 'shop_location'],
+  description: ['details', 'remarks', 'notes']
+};
+
 function quoteIdentifier(value) {
   return '"' + String(value).replace(/"/g, '""') + '"';
 }
@@ -44,16 +56,59 @@ function parseJson(value) {
   try { return JSON.parse(value); } catch (_) { return { value: String(value) }; }
 }
 
+function firstValue(row, column) {
+  if (row[column] !== undefined && row[column] !== null && String(row[column]).trim() !== '') {
+    return row[column];
+  }
+  for (const alias of aliasMap[column] || []) {
+    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim() !== '') {
+      return row[alias];
+    }
+  }
+  return undefined;
+}
+
 function normalizeValue(table, column, value) {
   if (value === undefined) return null;
 
   const jsonColumns = new Set(['details', 'payload', 'provider_response']);
   if (jsonColumns.has(column)) return parseJson(value);
 
-  // SQLite booleans may be stored as 0/1.
   if (table === 'qr_codes' && column === 'active') return Boolean(value);
 
   return value;
+}
+
+function buildRow(table, postgresColumns, sqliteRow) {
+  const result = {};
+  for (const column of postgresColumns) {
+    let value = firstValue(sqliteRow, column);
+
+    // Preserve legacy/source-only fields when the PostgreSQL table has a JSONB
+    // details/payload column. This prevents data loss when old SQLite schemas
+    // used different column names.
+    if ((column === 'details' || column === 'payload') && value === undefined) {
+      const reserved = new Set(['id', 'created_at', 'updated_at']);
+      const extras = {};
+      for (const [key, extraValue] of Object.entries(sqliteRow)) {
+        if (!reserved.has(key) && !(key in result) && extraValue !== undefined) extras[key] = extraValue;
+      }
+      value = extras;
+    }
+
+    // Current PostgreSQL schema requires township civilian/shop names. Legacy
+    // SQLite data may use another label or contain an empty value. Keep the
+    // row migratable without inventing a person's name.
+    if (table === 'township_civilians' && column === 'name' && (value === undefined || value === null || String(value).trim() === '')) {
+      value = 'Unnamed civilian';
+    }
+    if (table === 'township_shops' && column === 'name' && (value === undefined || value === null || String(value).trim() === '')) {
+      value = 'Unnamed shop';
+    }
+
+    result[column] = normalizeValue(table, column, value);
+  }
+  return result;
 }
 
 async function getPostgresColumns(table) {
@@ -76,10 +131,10 @@ async function migrateTable(db, table) {
   if (!postgresColumns.length) return { sourceRows: 0, written: 0, skipped: true };
 
   const sqliteColumns = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map(row => row.name);
-  const columns = postgresColumns.filter(column => sqliteColumns.includes(column));
+  const columns = postgresColumns.filter(column => sqliteColumns.includes(column) || aliasMap[column]?.some(alias => sqliteColumns.includes(alias)) || ['details', 'payload'].includes(column));
   if (!columns.length) return { sourceRows: 0, written: 0, skipped: true };
 
-  const rows = db.prepare(`SELECT ${columns.map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(table)}`).all();
+  const rows = db.prepare(`SELECT * FROM ${quoteIdentifier(table)}`).all();
   if (!rows.length) return { sourceRows: 0, written: 0, skipped: false };
 
   const hasId = columns.includes('id');
@@ -89,16 +144,15 @@ async function migrateTable(db, table) {
 
   let written = 0;
   await transaction(async client => {
-    for (const row of rows) {
-      const values = columns.map(column => normalizeValue(table, column, row[column]));
+    for (const sqliteRow of rows) {
+      const mapped = buildRow(table, columns, sqliteRow);
+      const values = columns.map(column => mapped[column]);
       let sql;
 
       if (hasId) {
         sql = `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})
           ON CONFLICT (id) DO UPDATE SET ${updateColumns.map(column => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`).join(', ')}`;
       } else {
-        // Tables in the current CAMS schema all have an id, but retain a safe
-        // insert path for future tables without one.
         sql = `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})`;
       }
 
@@ -107,7 +161,6 @@ async function migrateTable(db, table) {
     }
   });
 
-  // Keep BIGSERIAL sequences ahead of future inserts after explicit id copies.
   if (hasId) {
     await query(`
       SELECT setval(
