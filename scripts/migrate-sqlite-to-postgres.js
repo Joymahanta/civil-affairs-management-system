@@ -12,30 +12,15 @@ const { query, transaction, pool } = require('../db/postgres');
 const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const dbPath = path.join(dataDir, 'civil-affairs.db');
 
-// Parent tables first, then dependent/history tables.
 const migrationOrder = [
-  'departments',
-  'designations',
-  'users',
-  'staff',
-  'complaints',
-  'complaint_history',
-  'equipment',
-  'tenders',
-  'tender_bidders',
-  'tender_history',
-  'activity',
-  'resident_users',
-  'quarter_applications',
-  'shop_applications',
-  'township_civilians',
-  'township_shops',
-  'qr_codes',
-  'notification_history'
+  'departments', 'designations', 'users', 'staff', 'complaints', 'complaint_history',
+  'equipment', 'tenders', 'tender_bidders', 'tender_history', 'activity', 'resident_users',
+  'quarter_applications', 'shop_applications', 'township_civilians', 'township_shops',
+  'qr_codes', 'notification_history'
 ];
 
 const aliasMap = {
-  name: ['full_name', 'civilian_name', 'person_name', 'applicant_name', 'owner_name'],
+  name: ['full_name', 'civilian_name', 'person_name', 'applicant_name', 'owner_name', 'resident'],
   phone: ['mobile', 'mobile_no', 'phone_number', 'contact_phone'],
   email: ['email_address', 'mail'],
   address: ['residential_address', 'home_address', 'full_address'],
@@ -57,48 +42,37 @@ function parseJson(value) {
 }
 
 function firstValue(row, column) {
-  if (row[column] !== undefined && row[column] !== null && String(row[column]).trim() !== '') {
-    return row[column];
-  }
+  if (row[column] !== undefined && row[column] !== null && String(row[column]).trim() !== '') return row[column];
   for (const alias of aliasMap[column] || []) {
-    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim() !== '') {
-      return row[alias];
-    }
+    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim() !== '') return row[alias];
   }
   return undefined;
 }
 
 function normalizeValue(table, column, value) {
   if (value === undefined) return null;
-
-  const jsonColumns = new Set(['details', 'payload', 'provider_response']);
-  if (jsonColumns.has(column)) return parseJson(value);
-
+  if (['details', 'payload', 'provider_response'].includes(column)) return parseJson(value);
   if (table === 'qr_codes' && column === 'active') return Boolean(value);
-
   return value;
 }
 
 function buildRow(table, postgresColumns, sqliteRow) {
   const result = {};
+  const reserved = new Set(['id', 'created_at', 'updated_at']);
+
   for (const column of postgresColumns) {
     let value = firstValue(sqliteRow, column);
 
-    // Preserve legacy/source-only fields when the PostgreSQL table has a JSONB
-    // details/payload column. This prevents data loss when old SQLite schemas
-    // used different column names.
+    // Preserve legacy/source-only fields inside JSONB columns.
     if ((column === 'details' || column === 'payload') && value === undefined) {
-      const reserved = new Set(['id', 'created_at', 'updated_at']);
       const extras = {};
       for (const [key, extraValue] of Object.entries(sqliteRow)) {
-        if (!reserved.has(key) && !(key in result) && extraValue !== undefined) extras[key] = extraValue;
+        if (!reserved.has(key) && extraValue !== undefined && extraValue !== null) extras[key] = extraValue;
       }
       value = extras;
     }
 
-    // Current PostgreSQL schema requires township civilian/shop names. Legacy
-    // SQLite data may use another label or contain an empty value. Keep the
-    // row migratable without inventing a person's name.
+    // SQLite township_civilians calls this field `resident`.
     if (table === 'township_civilians' && column === 'name' && (value === undefined || value === null || String(value).trim() === '')) {
       value = 'Unnamed civilian';
     }
@@ -113,8 +87,7 @@ function buildRow(table, postgresColumns, sqliteRow) {
 
 async function getPostgresColumns(table) {
   const rows = await query(`
-    SELECT column_name
-    FROM information_schema.columns
+    SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = $1
     ORDER BY ordinal_position
   `, [table]);
@@ -147,15 +120,10 @@ async function migrateTable(db, table) {
     for (const sqliteRow of rows) {
       const mapped = buildRow(table, columns, sqliteRow);
       const values = columns.map(column => mapped[column]);
-      let sql;
-
-      if (hasId) {
-        sql = `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})
-          ON CONFLICT (id) DO UPDATE SET ${updateColumns.map(column => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`).join(', ')}`;
-      } else {
-        sql = `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})`;
-      }
-
+      const sql = hasId
+        ? `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})
+           ON CONFLICT (id) DO UPDATE SET ${updateColumns.map(column => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`).join(', ')}`
+        : `INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${placeholders})`;
       await client.query(sql, values);
       written += 1;
     }
@@ -163,11 +131,9 @@ async function migrateTable(db, table) {
 
   if (hasId) {
     await query(`
-      SELECT setval(
-        pg_get_serial_sequence($1, 'id'),
+      SELECT setval(pg_get_serial_sequence($1, 'id'),
         COALESCE((SELECT MAX(id) FROM ${quoteIdentifier(table)}), 1),
-        COALESCE((SELECT MAX(id) FROM ${quoteIdentifier(table)}), 0) > 0
-      )
+        COALESCE((SELECT MAX(id) FROM ${quoteIdentifier(table)}), 0) > 0)
     `, [table]);
   }
 
@@ -175,9 +141,7 @@ async function migrateTable(db, table) {
 }
 
 async function main() {
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`SQLite database not found: ${dbPath}`);
-  }
+  if (!fs.existsSync(dbPath)) throw new Error(`SQLite database not found: ${dbPath}`);
 
   const db = new Database(dbPath, { readonly: true });
   try {
@@ -195,7 +159,6 @@ async function main() {
       total += result.written;
       console.log(`  ${table}: ${result.written}/${result.sourceRows} row(s) copied`);
     }
-
     if (missing.length) console.log(`  Not present in SQLite (skipped): ${missing.join(', ')}`);
     console.log(`Migration complete: ${total} row(s) written to PostgreSQL.`);
     console.log('SQLite was opened read-only and remains untouched. The migration is safe to rerun.');
