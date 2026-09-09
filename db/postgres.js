@@ -1,23 +1,36 @@
 'use strict';
 
 // PostgreSQL connection layer for CAMS.
-// This module is intentionally independent from the existing SQLite/Firestore
-// stack so the application can be cut over table-by-table without downtime.
+// Supports local development via DB_* variables and hosted deployments
+// via DATABASE_URL (for example, a secure tunnel endpoint).
 require('dotenv').config();
 
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT || 5432),
-  database: process.env.DB_NAME || 'civil_affairs',
-  user: process.env.DB_USER || 'cams_app',
-  password: process.env.DB_PASSWORD,
+const connectionString = process.env.DATABASE_URL;
+const isLocalDatabase = !connectionString || /localhost|127\.0\.0\.1/.test(connectionString);
+
+const poolConfig = connectionString
+  ? {
+      connectionString,
+      ssl: isLocalDatabase ? false : { rejectUnauthorized: false }
+    }
+  : {
+      host: process.env.DB_HOST || 'localhost',
+      port: Number(process.env.DB_PORT || 5432),
+      database: process.env.DB_NAME || 'civil_affairs',
+      user: process.env.DB_USER || 'cams_app',
+      password: process.env.DB_PASSWORD,
+    };
+
+Object.assign(poolConfig, {
   max: Number(process.env.DB_POOL_MAX || 10),
   idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS || 30000),
   connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 5000),
   allowExitOnIdle: true
 });
+
+const pool = new Pool(poolConfig);
 
 pool.on('error', error => {
   console.error('[postgres] Unexpected idle-client error:', error.message);
