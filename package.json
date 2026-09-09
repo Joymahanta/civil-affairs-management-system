@@ -9,6 +9,7 @@
     "dev": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js -r ./firebase-all-routes.js -r ./firebase-qr-cutover.js -r ./cams-final-fixes.js -r ./resident-workforce-cutover.js -r ./resident-complaint-workforce-cutover.js -r ./admin-complaint-current-user-cutover.js -r ./startup-cams-patch.js -r ./cams-current-fixes.js -r ./no-reload-admin-loader.js -r ./quarter-actions-loader.js -r ./firebase-route-priority.js --watch session-store-patch.js",
     "firestore:migrate": "node scripts/migrate-sqlite-to-firestore.js",
     "postgres:migrate": "node scripts/migrate-sqlite-to-postgres.js",
+    "postgres:verify": "node scripts/verify-postgres-migration.js",
     "test": "node tests/api-test.js"
   },
   "dependencies": {
