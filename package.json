@@ -8,6 +8,7 @@
     "start": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js -r ./firebase-all-routes.js -r ./firebase-qr-cutover.js -r ./cams-final-fixes.js -r ./resident-workforce-cutover.js -r ./resident-complaint-workforce-cutover.js -r ./admin-complaint-current-user-cutover.js -r ./startup-cams-patch.js -r ./cams-current-fixes.js -r ./no-reload-admin-loader.js -r ./quarter-actions-loader.js -r ./firebase-route-priority.js session-store-patch.js",
     "dev": "node -r ./qr-management-server.js -r ./resident-services-server.js -r ./admin-applications-loader.js -r ./firebase-integration-server.js -r ./firebase-all-routes.js -r ./firebase-qr-cutover.js -r ./cams-final-fixes.js -r ./resident-workforce-cutover.js -r ./resident-complaint-workforce-cutover.js -r ./admin-complaint-current-user-cutover.js -r ./startup-cams-patch.js -r ./cams-current-fixes.js -r ./no-reload-admin-loader.js -r ./quarter-actions-loader.js -r ./firebase-route-priority.js --watch session-store-patch.js",
     "firestore:migrate": "node scripts/migrate-sqlite-to-firestore.js",
+    "postgres:migrate": "node scripts/migrate-sqlite-to-postgres.js",
     "test": "node tests/api-test.js"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "express": "^4.21.2",
     "express-session": "^1.19.0",
     "firebase-admin": "^14.3.0",
-    "helmet": "^8.0.0"
+    "helmet": "^8.0.0",
+    "pg": "^8.16.3"
   }
 }
