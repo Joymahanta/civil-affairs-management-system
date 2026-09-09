@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const { query, close } = require('../db/postgres');
+const { query, pool } = require('../db/postgres');
 
 async function main() {
   const schemaPath = path.join(__dirname, '..', 'db', 'schema.sql');
@@ -27,5 +27,5 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    await close();
+    await pool.end();
   });
